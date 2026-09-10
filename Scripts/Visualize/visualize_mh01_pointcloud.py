@@ -58,7 +58,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=Path("Results/MACVO-Fast@MH01_MH01_pointcloud.ply"))
     parser.add_argument("--output", type=Path, default=Path("Results/MH01_pointcloud_3d.html"))
-    parser.add_argument("--max-points", type=int, default=150_000)
+    parser.add_argument("--max-points", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
     xyz, rgb = read_ply_vertices(args.input)
