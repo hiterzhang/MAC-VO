@@ -39,12 +39,10 @@ def read_ply_vertices(path: Path) -> tuple[np.ndarray, np.ndarray]:
 
 
 def build_viewer(xyz: np.ndarray, rgb: np.ndarray, title: str) -> go.Figure:
-    colors = [f"rgb({r},{g},{b})" for r, g, b in rgb]
     fig = go.Figure(go.Scatter3d(
         x=xyz[:, 0], y=xyz[:, 1], z=xyz[:, 2], mode="markers",
-        marker=dict(size=1.5, color=colors, opacity=0.88),
-        text=[f"x={x:.3f}<br>y={y:.3f}<br>z={z:.3f}" for x, y, z in xyz],
-        hoverinfo="text", name="MH01 points"))
+        marker=dict(size=1.5, color="#39d9c5", opacity=0.88),
+        hoverinfo="none", name="MH01 points"))
     fig.update_layout(title=dict(text=title, x=0.02, y=0.97, font=dict(size=20, color="#d8f3f0")),
         paper_bgcolor="#071316", plot_bgcolor="#071316", font=dict(color="#b9d7d4"),
         margin=dict(l=0, r=0, t=45, b=0), showlegend=False,
