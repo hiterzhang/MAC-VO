@@ -172,7 +172,7 @@ SEED=0 RESULT_ROOT=/home/zzh/MACVO/Results/WindowICP_EuRoC \
 ./Scripts/run_euroc_window_icp_mh02_v203.sh V103 V201 V202 V203
 ~~~
 
-脚本使用文件锁防止同一输出根目录同时启动两个批次。每个批次使用唯一目录，逐序列保存运行日志，最终输出metrics.csv和metrics.json。设置DRY_RUN=1可只检查并打印命令。
+脚本使用文件锁防止同一输出根目录同时启动两个批次。MACVO的进度条、模块信息、Timer Report和异常会实时显示在终端，同时原样写入逐序列run.log和批次launcher日志；最终输出metrics.csv和metrics.json。设置DRY_RUN=1可只检查并打印命令。
 
 仅跑所需窗口版本并评估（不重新跑基线）：
 

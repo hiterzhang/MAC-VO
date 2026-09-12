@@ -19,6 +19,33 @@ from Utility.Config import load_config
 from Evaluation.EvalSeq import EvaluateSequences
 
 
+def run_and_tee(command, cwd, env, log_path, terminal=None):
+    """Stream a child's raw stdout to the terminal and its per-run log."""
+    terminal = sys.stdout.buffer if terminal is None else terminal
+    with Path(log_path).open("wb") as log:
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=0,
+        )
+        assert process.stdout is not None
+        with process.stdout:
+            while True:
+                chunk = process.stdout.read(8192)
+                if not chunk:
+                    break
+                terminal.write(chunk)
+                terminal.flush()
+                log.write(chunk)
+                log.flush()
+        returncode = process.wait()
+    if returncode != 0:
+        raise subprocess.CalledProcessError(returncode, command)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sequences", nargs="+", default=["MH01"])
@@ -66,8 +93,7 @@ def main():
             env.setdefault("OMP_NUM_THREADS", "4")
             env.setdefault("MKL_NUM_THREADS", "4")
             print(f"Running {seq} {mode} ... log: {folder/'run.log'}", flush=True)
-            with (folder/"run.log").open("w") as log:
-                subprocess.run(command, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
+            run_and_tee(command, ROOT, env, folder/"run.log")
             spaces = list((folder/"outputs").glob("*/*/run_provenance.json"))
             if len(spaces) != 1:
                 raise RuntimeError(f"Expected exactly one run in {folder}")
