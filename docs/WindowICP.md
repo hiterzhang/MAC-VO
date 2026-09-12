@@ -152,6 +152,28 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
   --seed 0
 ~~~
 
+仅运行MH02至V203的五帧“相邻＋间隔一帧”版本，并在每条序列结束后自动评估：
+
+~~~bash
+./Scripts/run_euroc_window_icp_mh02_v203.sh
+~~~
+
+可用环境变量指定随机种子和输出根目录：
+
+~~~bash
+SEED=0 RESULT_ROOT=/home/zzh/MACVO/Results/WindowICP_EuRoC \
+./Scripts/run_euroc_window_icp_mh02_v203.sh
+~~~
+
+脚本默认顺序为MH02、MH03、MH04、MH05、V101、V102、V103、V201、V202、V203。
+也可以在中断后显式传入尚未运行的序列，例如：
+
+~~~bash
+./Scripts/run_euroc_window_icp_mh02_v203.sh V103 V201 V202 V203
+~~~
+
+脚本使用文件锁防止同一输出根目录同时启动两个批次。每个批次使用唯一目录，逐序列保存运行日志，最终输出metrics.csv和metrics.json。设置DRY_RUN=1可只检查并打印命令。
+
 仅跑所需窗口版本并评估（不重新跑基线）：
 
 ~~~bash
