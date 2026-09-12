@@ -1,0 +1,192 @@
+"""Five-frame, pose-only window refinement of the existing Fast ICP frontend."""
+import json
+from pathlib import Path
+import time
+
+import pypose as pp
+import torch
+
+from Odometry.MACVO import MACVO
+from Module.Optimization.WindowICP import Edge, EdgeWindow, optimize_window
+from Utility.Point import pixel2point_NED, filterPointsInRange
+from Utility.PrettyPrint import Logger
+
+
+@torch.no_grad()
+def reanchor_points(graph, frame_ids, before, after):
+    """Transform each point by the correction of its source/owner frame."""
+    for i, frame_id in enumerate(frame_ids):
+        if torch.equal(before[i], after[i]):
+            continue
+        observations = graph.get_frame2match(graph.frames[torch.tensor([frame_id])])
+        owner = graph.match2frame1.project(observations.index)
+        owned = observations.index[owner == frame_id]
+        if owned.numel() == 0:
+            continue
+        point_ids = graph.match2point.project(owned).unique()
+        correction = pp.SE3(after[i].double()) @ pp.SE3(before[i].double()).Inv()
+        positions = graph.points.data["pos_Tw"][point_ids].double()
+        covariances = graph.points.data["cov_Tw"][point_ids].double()
+        R = correction.rotation().matrix()
+        graph.points.data["pos_Tw"][point_ids] = correction.Act(positions).float()
+        graph.points.data["cov_Tw"][point_ids] = R @ covariances @ R.T
+
+
+class WindowMACVO(MACVO):
+    def __init__(self, *, window_size=5, skip_matching=True,
+                 window_iterations=10, window_huber_delta=3.0, **kwargs):
+        super().__init__(**kwargs)
+        self.edge_window = EdgeWindow(window_size)
+        self.skip_matching = skip_matching
+        self.window_iterations = window_iterations
+        self.window_huber_delta = window_huber_delta
+        self.frame_cache = {}
+        self.window_records = []
+
+    @classmethod
+    def from_config(cls, cfg):
+        c = cfg.Odometry
+        if c.args.mapping or c.keyframe.type != "AllKeyframe":
+            raise ValueError("Window v1 requires mapping=false and AllKeyframe")
+        if c.optimizer.type != "TwoFrame_PGO" or c.optimizer.args.graph_type != "icp":
+            raise ValueError("Window initializer must be TwoFrame_PGO with graph_type=icp")
+        if c.optimizer.args.parallel:
+            raise ValueError("Window v1 requires a synchronous initializer (parallel=false)")
+        if c.outlier.type != "CovarianceSanityFilter":
+            raise ValueError("Window v1 supports CovarianceSanityFilter")
+        if c.args.window_iterations < 1 or c.args.window_huber_delta <= 0:
+            raise ValueError("Invalid window solver settings")
+        return super().from_config(cfg)
+
+    def initialize(self, frame0):
+        super().initialize(frame0)
+        self.frame_cache[0] = (frame0, self.prev_keyframe[2])
+
+    def _edge(self, a, b, uv0, uv1, d0, d1, cov0, cov1, K0, K1):
+        p0 = pixel2point_NED(uv0.cpu(), d0.cpu(), K0.cpu()).double()
+        p1 = pixel2point_NED(uv1.cpu(), d1.cpu(), K1.cpu()).double()
+        cov0, cov1 = cov0.cpu().double(), cov1.cpu().double()
+        valid = (torch.isfinite(p0).all(-1) & torch.isfinite(p1).all(-1)
+                 & (d0.cpu() > 0) & (d1.cpu() > 0)
+                 & torch.isfinite(cov0).all(dim=(-2, -1)) & torch.isfinite(cov1).all(dim=(-2, -1)))
+        ids = torch.nonzero(valid).flatten()
+        if len(ids):
+            good = ((torch.linalg.cholesky_ex(cov0[ids]).info == 0)
+                    & (torch.linalg.cholesky_ex(cov1[ids]).info == 0))
+            ids = ids[good]
+        if len(ids) < self.min_num_point:
+            return None
+        return Edge(a, b, p0[ids], p1[ids], cov0[ids], cov1[ids])
+
+    @torch.inference_mode()
+    def _skip_edge(self, a, b):
+        frame0, depth0 = self.frame_cache[a]
+        frame1, depth1 = self.frame_cache[b]
+        # Keep the existing two-sample CUDA graph and its memory pool.
+        # Only the temporal half is consumed; use cached current stereo depth.
+        _, match = self.Frontend.estimate_pair(frame0.stereo, frame1.stereo)
+        # Extra random keypoint sampling must not perturb subsequent adjacent sampling.
+        with torch.random.fork_rng(devices=[]):
+            torch.default_generator.manual_seed(1000003 + a * 1009 + b)
+            uv0 = self.KeypointSelector.select_point(
+                frame0.stereo, self.num_point, depth0, depth1, match)
+        uv1 = uv0 + self.Frontend.retrieve_pixels(uv0, match.flow).T
+        valid = torch.isfinite(uv1).all(-1) & filterPointsInRange(
+            uv1, (self.edge_width, frame1.stereo.width-self.edge_width),
+            (self.edge_width, frame1.stereo.height-self.edge_width))
+        uv0, uv1 = uv0[valid], uv1[valid]
+        if len(uv0) < self.min_num_point:
+            return None
+        d0 = self.Frontend.retrieve_pixels(uv0, depth0.depth).squeeze(0)
+        d1 = self.Frontend.retrieve_pixels(uv1, depth1.depth).squeeze(0)
+        v0 = self.Frontend.retrieve_pixels(uv0, depth0.cov).squeeze(0)
+        v1 = self.Frontend.retrieve_pixels(uv1, depth1.cov).squeeze(0)
+        uvvar0 = torch.full((len(uv0), 3), self.match_cov_default, device=self.device)
+        uvvar0[:, 2] = 0
+        uvvar1 = self.Frontend.retrieve_pixels(uv0, match.cov).T.clone()
+        cov0 = self.ObsCovModel.estimate(frame0.stereo, uv0, depth0, v0, uvvar0)
+        cov1 = self.ObsCovModel.estimate(frame1.stereo, uv1, depth1, v1, uvvar1)
+        return self._edge(a, b, uv0, uv1, d0, d1, cov0, cov1,
+                          frame0.stereo.frame_K, frame1.stereo.frame_K)
+
+    def run_pair(self, frame0, frame1):
+        before_match = len(self.graph.match)
+        a = self.prev_keyframe[1]
+        super().run_pair(frame0, frame1)
+        b = self.prev_keyframe[1]
+        # Flush the two-frame initializer before joint refinement. Clearing this
+        # result is essential: a later base write_map must not undo window poses.
+        self.Optimizer.write_map(self.graph)
+        self.Optimizer.optimize_res = None
+        self.Optimizer.has_opt_job = False
+        self.frame_cache[b] = (frame1, self.prev_keyframe[2])
+        first = max(0, b-self.edge_window.size+1)
+        self.frame_cache = {i: value for i, value in self.frame_cache.items() if i >= first}
+        self.edge_window.advance(b)
+
+        obs = self.graph.match[before_match:]
+        adjacent = self._edge(
+            a, b, obs.data["pixel1_uv"], obs.data["pixel2_uv"],
+            obs.data["pixel1_d"].squeeze(-1), obs.data["pixel2_d"].squeeze(-1),
+            obs.data["obs1_covTc"], obs.data["obs2_covTc"],
+            frame0.stereo.frame_K, frame1.stereo.frame_K)
+        if adjacent is not None:
+            self.edge_window.add(adjacent)
+
+        skip_start = time.perf_counter()
+        skip = None
+        if self.skip_matching and b-2 in self.frame_cache:
+            skip = self._skip_edge(b-2, b)
+            if skip is not None:
+                self.edge_window.add(skip)
+        skip_seconds = time.perf_counter()-skip_start
+
+        ids = sorted(self.frame_cache)
+        old = self.graph.frames.data["pose"][torch.tensor(ids)].double().clone()
+        try:
+            result = optimize_window(old, ids, self.edge_window.edges,
+                                     max_iters=self.window_iterations,
+                                     huber_delta=self.window_huber_delta)
+        except ValueError as error:
+            # Preserve the initializer if observations cannot connect the window.
+            Logger.write("warn", f"Window {b} not refined: {error}")
+            record = {"frames": ids, "current": b, "status": "not_refined", "reason": str(error)}
+        else:
+            reanchor_points(self.graph, ids, old, result.poses)
+            self.graph.frames.data["pose"][torch.tensor(ids)] = result.poses.float()
+            record = result.diagnostics | {"current": b, "status": "refined"}
+        record.update({
+            "adjacent_matches": 0 if adjacent is None else len(adjacent.points_a),
+            "skip_matches": 0 if skip is None else len(skip.points_a),
+            "skip_seconds": skip_seconds, "cached_frames": len(self.frame_cache),
+            "cached_edges": len(self.edge_window.edges),
+        })
+        self.window_records.append(record)
+        for callback in self.on_optimize_writeback:
+            callback(self)
+
+    def terminate(self):
+        if self.terminated:
+            return
+        before = self.graph.frames.data["pose"].tensor.double().clone()
+        self.Optimizer.optimize_res = None
+        self.Optimizer.terminate()
+        # Base motion interpolation needs at least two relative motions.
+        if len(before) >= 3:
+            self.MapRefiner.elaborate_map(self.graph.frames)
+        after = self.graph.frames.data["pose"].tensor.double().clone()
+        reanchor_points(self.graph, list(range(len(before))), before, after)
+        self.frame_cache.clear()
+        self.edge_window._edges.clear()
+        self.terminated = True
+
+    def save_window_diagnostics(self, folder):
+        payload = {
+            "window_size": self.edge_window.size, "skip_matching": self.skip_matching,
+            "marginalization": False, "pose_only": True,
+            "initializer": "synchronous TwoFrame_PGO ICP",
+            "huber_delta_whitened": self.window_huber_delta,
+            "windows": self.window_records,
+        }
+        Path(folder, "window_diagnostics.json").write_text(
+            json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8")
