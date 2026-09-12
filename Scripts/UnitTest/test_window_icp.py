@@ -89,6 +89,32 @@ class WindowICPTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "finite"):
             Edge(edge.a, edge.b, points, edge.points_b, edge.cov_a, edge.cov_b)
 
+    def test_repeated_float32_writeback_preserves_unit_quaternions(self):
+        torch.manual_seed(15)
+        world = torch.randn(12, 3, dtype=torch.float64) + torch.tensor([4., 0., 0.])
+        cov = torch.eye(3, dtype=torch.float64).expand(12, 3, 3).clone() * .001
+        tangents = torch.zeros(40, 6, dtype=torch.float64)
+        tangents[:, 0] = torch.arange(40)*.04
+        tangents[:, 4] = torch.arange(40)*.01
+        truth = pp.se3(tangents).Exp()
+        estimates = [truth[0].tensor().float()]
+        window = EdgeWindow(5)
+        for b in range(1, 40):
+            estimates.append(estimates[-1].clone())
+            for gap in (1, 2):
+                a = b-gap
+                if a >= 0:
+                    window.add(Edge(a, b, truth[a].Inv().Act(world),
+                                    truth[b].Inv().Act(world), cov, cov))
+            window.advance(b)
+            ids = list(range(max(0, b-4), b+1))
+            output = optimize_window(torch.stack([estimates[i] for i in ids]), ids, window.edges)
+            for j, i in enumerate(ids):
+                estimates[i] = output.poses[j].float()
+        pose = pp.SE3(torch.stack(estimates).double())
+        self.assertLess((pose.tensor()[:, 3:].norm(dim=-1)-1).abs().max().item(), 1e-6)
+        self.assertLess((pose.Inv() @ truth).Log().tensor().norm(dim=-1).max().item(), 1e-4)
+
 
 if __name__ == "__main__":
     unittest.main()

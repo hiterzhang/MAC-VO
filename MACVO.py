@@ -168,8 +168,9 @@ if __name__ == "__main__":
     }
     metadata_path = exp_space.path("run_provenance.json")
     Path(metadata_path).write_text(json.dumps(provenance, indent=2), encoding="utf-8")
-    system = system_class.from_config(asNamespace(exp_space.config))
+    system = None
     try:
+        system = system_class.from_config(asNamespace(exp_space.config))
         system.receive_frames(sequence, exp_space, on_frame_finished=onFrameFinished)
         output_path = exp_space.path("poses.npy")
         if not Path(output_path).exists():

@@ -99,6 +99,11 @@ def huber_cost(r, delta):
     norm = r.norm(dim=-1)
     return torch.where(norm <= delta, norm.square(), 2*delta*norm-delta**2).sum()
 
+def normalized_pose(poses):
+    result = poses.clone()
+    result[..., 3:] /= result[..., 3:].norm(dim=-1, keepdim=True)
+    return result
+
 
 @dataclass
 class WindowResult:
@@ -131,8 +136,10 @@ def optimize_window(poses, frame_ids, edges, max_iters=10, huber_delta=3.0, damp
         raise ValueError("Window must be connected to its fixed anchor")
 
     # Solve near the origin for stable translational/rotational coupling.
+    original_anchor = poses[0].clone()
+    poses = normalized_pose(poses)
     anchor = pp.SE3(poses[0])
-    local = (anchor.Inv() @ pp.SE3(poses)).tensor()
+    local = normalized_pose((anchor.Inv() @ pp.SE3(poses)).tensor())
     local[0] = pp.identity_SE3(dtype=torch.float64).tensor()
     r, covariance, J = factor_system(local, frame_ids, edges)
     rw, Jw = whiten(r, covariance, J)
@@ -156,7 +163,7 @@ def optimize_window(poses, frame_ids, edges, max_iters=10, huber_delta=3.0, damp
                 continue
             delta = torch.zeros(len(local), 6, dtype=torch.float64)
             delta[1:] = step.reshape(-1, 6)
-            trial = (pp.se3(delta).Exp() @ pp.SE3(local)).tensor()
+            trial = normalized_pose((pp.se3(delta).Exp() @ pp.SE3(local)).tensor())
             trial[0] = local[0]
             tr, tc, tj = factor_system(trial, frame_ids, edges)
             twr, twj = whiten(tr, tc, tj)
@@ -173,8 +180,8 @@ def optimize_window(poses, frame_ids, edges, max_iters=10, huber_delta=3.0, damp
         if not improved or step.norm() < 1e-8 or decrease < 1e-8 * max(1., cost):
             break
 
-    output = (anchor @ pp.SE3(local)).tensor()
-    output[0] = poses[0]  # exact gauge preservation
+    output = normalized_pose((anchor @ pp.SE3(local)).tensor())
+    output[0] = original_anchor  # exact gauge preservation
     return WindowResult(output, {
         "frames": frame_ids, "anchor": frame_ids[0], "active_poses": len(frame_ids),
         "edges": len(edges), "adjacent_edges": sum(e.b-e.a == 1 for e in edges),

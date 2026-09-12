@@ -7,7 +7,7 @@ import pypose as pp
 import torch
 
 from Odometry.MACVO import MACVO
-from Module.Optimization.WindowICP import Edge, EdgeWindow, optimize_window
+from Module.Optimization.WindowICP import Edge, EdgeWindow, optimize_window, normalized_pose
 from Utility.Point import pixel2point_NED, filterPointsInRange
 from Utility.PrettyPrint import Logger
 
@@ -24,7 +24,8 @@ def reanchor_points(graph, frame_ids, before, after):
         if owned.numel() == 0:
             continue
         point_ids = graph.match2point.project(owned).unique()
-        correction = pp.SE3(after[i].double()) @ pp.SE3(before[i].double()).Inv()
+        correction = pp.SE3(normalized_pose(after[i].double())) @ pp.SE3(normalized_pose(before[i].double())).Inv()
+        correction = pp.SE3(normalized_pose(correction.tensor()))
         positions = graph.points.data["pos_Tw"][point_ids].double()
         covariances = graph.points.data["cov_Tw"][point_ids].double()
         R = correction.rotation().matrix()
@@ -152,8 +153,7 @@ class WindowMACVO(MACVO):
             Logger.write("warn", f"Window {b} not refined: {error}")
             record = {"frames": ids, "current": b, "status": "not_refined", "reason": str(error)}
         else:
-            reanchor_points(self.graph, ids, old, result.poses)
-            self.graph.frames.data["pose"][torch.tensor(ids)] = result.poses.float()
+            self._apply_refinement(ids, old, result)
             record = result.diagnostics | {"current": b, "status": "refined"}
         record.update({
             "adjacent_matches": 0 if adjacent is None else len(adjacent.points_a),
@@ -164,6 +164,13 @@ class WindowMACVO(MACVO):
         self.window_records.append(record)
         for callback in self.on_optimize_writeback:
             callback(self)
+
+    def _apply_refinement(self, ids, old, result):
+        reanchor_points(self.graph, ids, old, result.poses)
+        self.graph.frames.data["pose"][torch.tensor(ids)] = result.poses.float()
+        # Connected skip constraints can recover a weak-adjacent frame. Do not
+        # let termination interpolation overwrite its refined pose later.
+        self.graph.frames.data["need_interp"][torch.tensor(ids[1:])] = False
 
     def terminate(self):
         if self.terminated:
