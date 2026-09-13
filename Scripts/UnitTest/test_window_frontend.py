@@ -29,6 +29,30 @@ def stereo(left: float, right: float) -> StereoData:
 
 
 class FusedWindowFrontendTests(unittest.TestCase):
+    def test_rejects_non_single_frame_inputs_before_graph_capture(self):
+        prev1 = stereo(1, 10)
+        current = stereo(0, 30)
+        current.imageL = current.imageL.repeat(2, 1, 1, 1)
+
+        with self.assertRaisesRegex(ValueError, "single-frame"):
+            build_window_inputs(None, prev1, current)
+
+    def test_rejects_mismatched_image_shapes_before_graph_capture(self):
+        prev1 = stereo(1, 10)
+        current = stereo(0, 30)
+        current.imageR = current.imageR[..., :1]
+
+        with self.assertRaisesRegex(ValueError, "shape mismatch"):
+            build_window_inputs(None, prev1, current)
+
+    def test_rejects_mismatched_image_dtype_before_graph_capture(self):
+        prev1 = stereo(1, 10)
+        current = stereo(0, 30)
+        prev1.imageL = prev1.imageL.double()
+
+        with self.assertRaisesRegex(ValueError, "device/dtype mismatch"):
+            build_window_inputs(None, prev1, current)
+
     def test_generic_frontend_falls_back_to_pair_estimates(self):
         depth, adjacent, skip = object(), object(), object()
 

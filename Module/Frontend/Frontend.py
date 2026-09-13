@@ -147,6 +147,30 @@ def build_window_inputs(
 ) -> tuple[torch.Tensor, torch.Tensor, bool]:
     """Build stereo, adjacent-flow, and skip-flow pairs in fixed slot order."""
     skip_source = frame_t1 if frame_t2 is None else frame_t2
+    images = {
+        "frame_t.imageL": frame_t.imageL,
+        "frame_t.imageR": frame_t.imageR,
+        "frame_t1.imageL": frame_t1.imageL,
+        "skip_source.imageL": skip_source.imageL,
+    }
+    reference = frame_t.imageL
+    for name, image in images.items():
+        if image.ndim != 4 or image.shape[0] != 1:
+            raise ValueError(
+                f"Fused window inference requires single-frame BCHW inputs; "
+                f"{name} has shape {tuple(image.shape)}"
+            )
+        if image.shape != reference.shape:
+            raise ValueError(
+                f"Fused window input shape mismatch: {name} has "
+                f"{tuple(image.shape)}, expected {tuple(reference.shape)}"
+            )
+        if image.device != reference.device or image.dtype != reference.dtype:
+            raise ValueError(
+                f"Fused window input device/dtype mismatch for {name}: "
+                f"{image.device}/{image.dtype}, expected "
+                f"{reference.device}/{reference.dtype}"
+            )
     input_a = torch.cat(
         [frame_t.imageL, frame_t1.imageL, skip_source.imageL], dim=0
     )
