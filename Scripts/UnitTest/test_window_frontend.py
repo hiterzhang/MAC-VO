@@ -1,0 +1,104 @@
+import unittest
+from types import SimpleNamespace
+
+import pypose as pp
+import torch
+
+from DataLoader import StereoData
+from Module.Frontend.Frontend import (
+    CUDAGraph_FlowFormerCovFrontend,
+    IFrontend,
+    build_window_inputs,
+)
+
+
+def stereo(left: float, right: float) -> StereoData:
+    K = torch.eye(3).unsqueeze(0)
+    K[0, 0, 0] = 10
+    K[0, 1, 1] = 10
+    return StereoData(
+        T_BS=pp.identity_SE3(1),
+        K=K,
+        baseline=torch.tensor([0.2]),
+        time_ns=[0],
+        height=2,
+        width=2,
+        imageL=torch.full((1, 3, 2, 2), left),
+        imageR=torch.full((1, 3, 2, 2), right),
+    )
+
+
+class FusedWindowFrontendTests(unittest.TestCase):
+    def test_generic_frontend_falls_back_to_pair_estimates(self):
+        depth, adjacent, skip = object(), object(), object()
+
+        class PairFrontend(IFrontend):
+            def __init__(self):
+                self.calls = []
+
+            @property
+            def provide_cov(self):
+                return False, False
+
+            def estimate_pair(self, frame0, frame1):
+                self.calls.append((frame0, frame1))
+                return (depth, adjacent) if frame0 == "t1" else (object(), skip)
+
+            def estimate_depth(self, frame):
+                raise NotImplementedError
+
+            @classmethod
+            def is_valid_config(cls, config):
+                return None
+
+        frontend = PairFrontend()
+        result = frontend.estimate_window("t2", "t1", "t")
+
+        self.assertEqual(result, (depth, adjacent, skip))
+        self.assertEqual(frontend.calls, [("t1", "t"), ("t2", "t")])
+
+    def test_builds_stereo_adjacent_and_skip_slots(self):
+        input_a, input_b, has_skip = build_window_inputs(
+            stereo(2, 20), stereo(1, 10), stereo(0, 30)
+        )
+
+        self.assertTrue(has_skip)
+        self.assertEqual(input_a[:, 0, 0, 0].tolist(), [0.0, 1.0, 2.0])
+        self.assertEqual(input_b[:, 0, 0, 0].tolist(), [30.0, 0.0, 0.0])
+
+    def test_first_step_uses_fixed_batch3_without_skip_output(self):
+        input_a, input_b, has_skip = build_window_inputs(
+            None, stereo(1, 10), stereo(0, 30)
+        )
+
+        self.assertFalse(has_skip)
+        self.assertEqual(input_a[:, 0, 0, 0].tolist(), [0.0, 1.0, 1.0])
+        self.assertEqual(input_b[:, 0, 0, 0].tolist(), [30.0, 0.0, 0.0])
+
+    def test_routes_slots_zero_one_two(self):
+        frontend = CUDAGraph_FlowFormerCovFrontend.__new__(
+            CUDAGraph_FlowFormerCovFrontend
+        )
+        frontend.config = SimpleNamespace(
+            device="cpu", enforce_positive_disparity=False
+        )
+        flow = torch.zeros(3, 2, 2, 2)
+        covariance = torch.ones(3, 2, 2, 2)
+        flow[0, 0] = 2
+        flow[1] = 11
+        flow[2] = 22
+        frontend.cuda_graph_estimate = lambda *_: (flow, covariance)
+
+        depth, adjacent, skip = frontend.estimate_window(
+            stereo(2, 20), stereo(1, 10), stereo(0, 30)
+        )
+
+        self.assertTrue(torch.allclose(depth.depth, torch.ones_like(depth.depth)))
+        self.assertTrue(torch.equal(adjacent.flow, flow[1:2]))
+        self.assertIsNotNone(skip)
+        assert skip is not None
+        self.assertTrue(torch.equal(skip.flow, flow[2:3]))
+
+
+if __name__ == "__main__":
+    unittest.main()

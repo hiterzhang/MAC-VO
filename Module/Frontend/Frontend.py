@@ -92,7 +92,20 @@ class IFrontend(ABC, ConfigTestableSubclass):
         depth_t1 = self.estimate_depth(frame_t1)
         depth_t2, match_t12 = self.estimate_pair(frame_t1, frame_t2)
         return depth_t1, depth_t2, match_t12
-    
+
+    def estimate_window(
+        self,
+        frame_t2: StereoData | None,
+        frame_t1: StereoData,
+        frame_t: StereoData,
+    ) -> tuple[IStereoDepth.Output, IMatcher.Output, IMatcher.Output | None]:
+        """Estimate current depth plus adjacent and optional two-step matches."""
+        depth, adjacent = self.estimate_pair(frame_t1, frame_t)
+        if frame_t2 is None:
+            return depth, adjacent, None
+        _, skip = self.estimate_pair(frame_t2, frame_t)
+        return depth, adjacent, skip
+
     @overload
     @staticmethod
     def retrieve_pixels(pixel_uv: torch.Tensor, scalar_map: torch.Tensor, interpolate: bool=False) -> torch.Tensor: ...
@@ -125,6 +138,22 @@ class CUDAGraphHandler:
     shape: torch.Size
     static_input: dict[str, torch.Tensor]
     static_ouput: dict[str, torch.Tensor]
+
+
+def build_window_inputs(
+    frame_t2: StereoData | None,
+    frame_t1: StereoData,
+    frame_t: StereoData,
+) -> tuple[torch.Tensor, torch.Tensor, bool]:
+    """Build stereo, adjacent-flow, and skip-flow pairs in fixed slot order."""
+    skip_source = frame_t1 if frame_t2 is None else frame_t2
+    input_a = torch.cat(
+        [frame_t.imageL, frame_t1.imageL, skip_source.imageL], dim=0
+    )
+    input_b = torch.cat(
+        [frame_t.imageR, frame_t.imageL, frame_t.imageL], dim=0
+    )
+    return input_a, input_b, frame_t2 is not None
 
 # Implementations
 
@@ -297,6 +326,36 @@ class CUDAGraph_FlowFormerCovFrontend(FlowFormerCovFrontend):
             self.inference_2_depth(est_flow[0:1], est_cov[0:1], frame_t2, self.config.enforce_positive_disparity),
             self.inference_2_match(est_flow[1:2], est_cov[1:2])
         )
+
+    @Timer.cpu_timeit("Frontend.estimate")
+    @Timer.gpu_timeit("Frontend.estimate")
+    @torch.inference_mode()
+    def estimate_window(
+        self,
+        frame_t2: StereoData | None,
+        frame_t1: StereoData,
+        frame_t: StereoData,
+    ) -> tuple[IStereoDepth.Output, IMatcher.Output, IMatcher.Output | None]:
+        input_a, input_b, has_skip = build_window_inputs(
+            frame_t2, frame_t1, frame_t
+        )
+        est_flow, est_cov = self.cuda_graph_estimate(
+            input_a.to(device=self.config.device),
+            input_b.to(device=self.config.device),
+        )
+        est_flow = est_flow.float()
+        est_cov = est_cov.float()
+
+        depth = self.inference_2_depth(
+            est_flow[0:1], est_cov[0:1], frame_t,
+            self.config.enforce_positive_disparity,
+        )
+        adjacent = self.inference_2_match(est_flow[1:2], est_cov[1:2])
+        skip = (
+            self.inference_2_match(est_flow[2:3], est_cov[2:3])
+            if has_skip else None
+        )
+        return depth, adjacent, skip
     
     def cuda_graph_estimate(self, inp_A: torch.Tensor, inp_B: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -339,7 +398,11 @@ class CUDAGraph_FlowFormerCovFrontend(FlowFormerCovFrontend):
         else:
             g_context = self.cuda_graph
             
-            assert inp_A.shape == g_context.shape, f"Input shape mismatch for CUDAGraph replay: {inp_A.shape} != {g_context.shape}"
+            assert inp_A.shape == g_context.shape, (
+                f"CUDAGraph input shape mismatch: requested batch={inp_A.shape[0]} "
+                f"shape={tuple(inp_A.shape)}, captured batch={g_context.shape[0]} "
+                f"shape={tuple(g_context.shape)}"
+            )
             
             g_context.static_input["input_A"].copy_(inp_A)
             g_context.static_input["input_B"].copy_(inp_B)
