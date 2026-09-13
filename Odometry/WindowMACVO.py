@@ -79,13 +79,23 @@ class WindowMACVO(MACVO):
             return None
         return Edge(a, b, p0[ids], p1[ids], cov0[ids], cov1[ids])
 
+    def _estimate_window_inputs(self, frame0, frame1):
+        if not self.skip_matching:
+            depth1, adjacent = self.Frontend.estimate_pair(
+                frame0.stereo, frame1.stereo
+            )
+            return depth1, adjacent, None
+
+        prev2 = self.frame_cache.get(self.prev_keyframe[1] - 1)
+        frame_t2 = None if prev2 is None else prev2[0].stereo
+        return self.Frontend.estimate_window(
+            frame_t2, frame0.stereo, frame1.stereo
+        )
+
     @torch.inference_mode()
-    def _skip_edge(self, a, b):
+    def _skip_edge_from_match(self, a, b, match):
         frame0, depth0 = self.frame_cache[a]
         frame1, depth1 = self.frame_cache[b]
-        # Keep the existing two-sample CUDA graph and its memory pool.
-        # Only the temporal half is consumed; use cached current stereo depth.
-        _, match = self.Frontend.estimate_pair(frame0.stereo, frame1.stereo)
         # Extra random keypoint sampling must not perturb subsequent adjacent sampling.
         with torch.random.fork_rng(devices=[]):
             torch.default_generator.manual_seed(1000003 + a * 1009 + b)
@@ -113,7 +123,10 @@ class WindowMACVO(MACVO):
     def run_pair(self, frame0, frame1):
         before_match = len(self.graph.match)
         a = self.prev_keyframe[1]
-        super().run_pair(frame0, frame1)
+        depth1, adjacent_match, skip_match = self._estimate_window_inputs(
+            frame0, frame1
+        )
+        super().run_pair_from_estimate(frame0, frame1, depth1, adjacent_match)
         b = self.prev_keyframe[1]
         # Flush the two-frame initializer before joint refinement. Clearing this
         # result is essential: a later base write_map must not undo window poses.
@@ -136,8 +149,8 @@ class WindowMACVO(MACVO):
 
         skip_start = time.perf_counter()
         skip = None
-        if self.skip_matching and b-2 in self.frame_cache:
-            skip = self._skip_edge(b-2, b)
+        if skip_match is not None and b-2 in self.frame_cache:
+            skip = self._skip_edge_from_match(b-2, b, skip_match)
             if skip is not None:
                 self.edge_window.add(skip)
         skip_seconds = time.perf_counter()-skip_start
