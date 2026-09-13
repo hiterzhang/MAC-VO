@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import time
+from types import SimpleNamespace
 
 import pypose as pp
 import torch
@@ -58,6 +59,33 @@ class WindowMACVO(MACVO):
         if c.args.window_iterations < 1 or c.args.window_huber_delta <= 0:
             raise ValueError("Invalid window solver settings")
         return super().from_config(cfg)
+
+    @classmethod
+    def is_valid_config(cls, config):
+        assert config is not None
+        base_config = SimpleNamespace(**vars(config))
+        base_config.args = SimpleNamespace(**{
+            key: getattr(config.args, key) for key in (
+                "device", "num_point", "edgewidth", "match_cov_default",
+                "profile", "mapping",
+            )
+        })
+        super().is_valid_config(base_config)
+        cls._enforce_config_spec(config.args, {
+            "device": lambda value: isinstance(value, str)
+                and ("cuda" in value or value == "cpu"),
+            "num_point": lambda value: isinstance(value, int) and value > 0,
+            "edgewidth": lambda value: isinstance(value, int) and value > 0,
+            "match_cov_default": lambda value: isinstance(value, (float, int))
+                and value > 0.0,
+            "profile": lambda value: isinstance(value, bool),
+            "mapping": lambda value: isinstance(value, bool),
+            "window_size": lambda value: isinstance(value, int) and 2 <= value <= 5,
+            "skip_matching": lambda value: isinstance(value, bool),
+            "window_iterations": lambda value: isinstance(value, int) and value >= 1,
+            "window_huber_delta": lambda value: isinstance(value, (float, int))
+                and value > 0.0,
+        })
 
     def initialize(self, frame0):
         super().initialize(frame0)
