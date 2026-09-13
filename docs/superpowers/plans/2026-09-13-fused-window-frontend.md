@@ -385,4 +385,3 @@ Expected: no whitespace errors and all non-local unit tests pass.
 git add docs/WindowICP.md
 git commit -m "docs: record fused batch3 frontend validation"
 ```
-

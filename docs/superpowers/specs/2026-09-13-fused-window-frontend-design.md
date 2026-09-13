@@ -123,10 +123,11 @@ replays that same graph on later calls.
 
 Ordinary `estimate_pair()` still captures batch size 2 when used by ordinary
 `MACVO`. A single frontend instance must not mix batch-2 and batch-3 capture
-modes. `WindowMACVO.from_config()` therefore validates that its configured
-frontend supports the fused window operation. A clear error is raised during
-construction if a specialized frontend advertises incompatible fixed-batch
-behavior.
+modes. `WindowMACVO` routes skip-enabled execution exclusively through
+`estimate_window()`, while the base class continues to use `estimate_pair()`.
+Generic frontends inherit a correct two-call fallback; the CUDA Graph frontend
+overrides it with fused execution. The existing capture-shape assertion reports
+both requested and captured batch sizes if a caller mixes the two modes.
 
 No concurrent graph replay or additional CUDA stream is introduced in this
 version. This keeps output-buffer lifetime and synchronization equivalent to
@@ -213,4 +214,3 @@ After the controlled run passes, run complete MH01 and compare against
 - Replacing FlowFormerCov or changing its weights.
 - Moving the CPU window solver to CUDA.
 - Adding marginalization, bundle adjustment, or new window constraints.
-
