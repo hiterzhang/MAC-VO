@@ -3,6 +3,7 @@ from pathlib import Path
 
 from Utility.Config import load_config
 from Odometry.MACVO import MACVO
+from Odometry.OnlineLoopWindowMACVO import OnlineLoopWindowMACVO
 from Odometry.WindowMACVO import WindowMACVO
 
 
@@ -19,5 +20,6 @@ def test_macvo_config(file_name: str):
     system_class = {
         "MACVO": MACVO,
         "WindowMACVO": WindowMACVO,
+        "OnlineLoopWindowMACVO": OnlineLoopWindowMACVO,
     }[system_type]
     system_class.is_valid_config(cfg.Odometry)
