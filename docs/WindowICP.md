@@ -252,7 +252,7 @@ v0.3新增独立配置[MACVO_Fast_WindowICP_Global.yaml](../Config/Experiment/MA
 
 序列结束后汇总inactive和当前active因子，固定第一帧，在第一帧局部坐标系执行CPU float64全局pose-only ICP。求解器逐边累积6x6位姿Hessian块，展开为SciPy COO/CSC稀疏矩阵并用稀疏线性求解；不会构造“全部观测×全部位姿”的dense Jacobian。目标函数、完整3x3协方差白化、向量Huber损失和SE(3)左乘更新与局部窗口求解保持一致。
 
-全局结果仅在状态为refined且全部有限时写回。成功写回同步重锚定各源帧拥有的地图点和协方差；断连、奇异或非有限结果保留插值后的v0.2轨迹。原始inactive观测只在运行期保留，v0.3尚未将其序列化到结果文件。
+全局结果仅在状态为refined且全部有限时写回。成功写回同步重锚定各源帧拥有的地图点和协方差；断连、奇异或非有限结果保留插值后的v0.2轨迹。早期v0.3运行的inactive观测只在运行期保留；后续离线长程版本新增了下述持久化归档。
 
 #### V203困难片段验证
 
@@ -288,15 +288,76 @@ v0.3共汇总237条因子，其中230条inactive、7条active，总计43885个�
 
 与旧提交`dc7c152`的完整V203结果相比，ATE高1.58%，RTE低7.55%，ROE低5.14%，RPE低7.03%。该比较同时包含v0.2的batch=3前端优化，不能把全部变化单独归因于全局后端；全局后端的严格单变量证据仍以上述同提交120帧对比为准。完整结果的ATE回退未超过预设2%阈值，其余相对指标均改善，因此v0.3仍可作为推荐候选，但在替代v0.2前应继续完成其他EuRoC序列对比。
 
+### 离线长程因子实验
+
+启用全局优化的新运行会额外保存：
+
+- `poses_before_global.npy`：同一次运行中，插值完成但全局优化尚未写回的严格前轨迹；格式与`poses.npy`相同。
+- `global_factors.npz`：全部`t-1`和`t-2`短程ICP因子、初始传感器位姿、时间戳及外参；观测保持CPU float64完整3×3协方差。
+- `global_refinement.json`：求解结果、归档状态、边/观测数量、文件大小和Git提交。
+
+`global_factors.npz`使用版本化、无pickle的NumPy格式并通过临时文件原子发布。离线工具会校验数组形状、ragged offsets、位姿四元数、协方差正定性、边端点、时间戳和源轨迹SHA-256。输入`poses.npy`及短程归档不会被覆盖。
+
+从已有结果目录生成真实`t-5`和`t-10`边：
+
+~~~bash
+.venv/bin/python Scripts/Experiment/GenerateLongRangeICP.py \
+  --space /absolute/path/to/result-leaf
+~~~
+
+生成器仅处理每5帧一个目标。初始化用一次固定batch=3得到第0帧深度；之后每个目标使用一次现有`estimate_window()`：槽0计算当前立体深度，槽1计算`t-5 -> t`，槽2计算`t-10 -> t`。在`t=5`时槽2复制`t-5`输入并丢弃输出。深度和帧缓存最多保留3个计划帧。
+
+离线重复短程求解或加入长程边：
+
+~~~bash
+.venv/bin/python Scripts/Experiment/RefineGlobalPoseICP.py \
+  --space /absolute/path/to/result-leaf --output-tag short
+
+.venv/bin/python Scripts/Experiment/RefineGlobalPoseICP.py \
+  --space /absolute/path/to/result-leaf \
+  --long-factors long_factors_gap5_10.npz \
+  --edge-kinds gap5 gap10 --output-tag gap5_10
+~~~
+
+输出使用`poses_global_<tag>.npy`、`global_<tag>_diagnostics.json`和`global_<tag>_metrics.json`。可以反复改变迭代次数和Huber阈值，不需要重新运行网络。
+
+困难V203短序列的一键严格对比：
+
+~~~bash
+.venv/bin/python Scripts/Experiment/CompareLongRangeICP.py \
+  --sequence V203 --seq-from 1095 --seq-to 1215 --seed 0 \
+  --result-root Results/LongRangeICP_V203_short
+~~~
+
+脚本只运行一次在线源轨迹，然后离线比较`before_global`、`short`、`gap5`和`gap5_10`四组。它输出`long_range_metrics.csv/json`、`comparison_manifest.json`、`verification.json`和`stage_gate.json`。只有`gap5_10`输出有限、固定锚不变、目标下降且ATE RMSE严格低于short-only时，`stage_gate.json`中的`passed`才为true。
+
+复用已生成的在线结果时传入`--space`，可跳过在线网络：
+
+~~~bash
+.venv/bin/python Scripts/Experiment/CompareLongRangeICP.py \
+  --space /absolute/path/to/result-leaf \
+  --sequence V203 --seq-from 1095 --seq-to 1215 --seed 0 \
+  --result-root Results/LongRangeICP_V203_short_reuse
+~~~
+
+校验某次对比的严格同源性：
+
+~~~bash
+.venv/bin/python Scripts/Experiment/CompareLongRangeICP.py \
+  --verify-space /absolute/path/to/comparison-run
+~~~
+
 ## 每次运行的追溯信息
 
 - config.yaml：本次Odometry配置。
 - run_provenance.json：Git提交、分支、工作区状态、配置SHA256、种子、torch/PyPose版本、预期帧数、完成/失败状态。
 - window_diagnostics.json：逐窗口位姿ID、锚、边数、匹配数、求解目标、步长接受次数、耗时及失败原因。
+- poses_before_global.npy / global_factors.npz / global_refinement.json：严格前后对比和离线后端实验输入。
+- long_factors_gap5_10.npz：离线生成的真实`t-5`及`t-10`观测。
 - poses.npy / ref_poses.npy / tensor_map.npz：兼容已有评估与地图导出。
 - elapsed_time.json：前端、协方差及里程计计时。
 
-v0.2跨帧约束只保存在运行期有界侧缓存。v0.3启用时会在内存中保留全部历史相邻和skip因子直到终止，但最终tensor_map仍只保留原邻接地图结构，不包含inactive原始观测。记录的边数和统计可用于验证执行路径；若需重建历史因子，应重新推理。
+v0.2跨帧约束只保存在运行期有界侧缓存。当前实验分支在全局模式下会保存独立因子归档；`tensor_map.npz`仍只包含原邻接地图结构，不重复嵌入inactive观测。
 
 ## 版本操作
 
