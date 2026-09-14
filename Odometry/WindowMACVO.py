@@ -4,10 +4,17 @@ from pathlib import Path
 import time
 from types import SimpleNamespace
 
+import numpy as np
 import pypose as pp
 import torch
 
 from Odometry.MACVO import MACVO
+from Module.Optimization.FactorArchive import (
+    SCHEMA_VERSION,
+    FactorArchive,
+    save_factor_archive,
+    sensor_to_body_trajectory,
+)
 from Module.Optimization.GlobalPoseICP import optimize_global_pose_graph
 from Module.Optimization.WindowICP import (
     Edge,
@@ -62,6 +69,10 @@ class WindowMACVO(MACVO):
         }
         self.retained_tensor_bytes = 0
         self.inactive_edge_count = 0
+        self._factor_snapshot = None
+        self.artifact_record = {
+            "status": "pending" if global_refine else "disabled"
+        }
 
     @classmethod
     def from_config(cls, cfg):
@@ -167,6 +178,27 @@ class WindowMACVO(MACVO):
             (edge.a, edge.b): edge for edge in self.edge_window.edges
         })
         return [edges[key] for key in sorted(edges)]
+
+    def _capture_factor_snapshot(self, poses):
+        if not self.global_refine:
+            return
+        graph = self.graph.frames.data
+        edges = tuple(self._global_edges())
+        edge_kinds = tuple(
+            {1: "adjacent", 2: "skip2"}[edge.b - edge.a]
+            for edge in edges
+        )
+        self._factor_snapshot = FactorArchive(
+            initial_sensor_poses=poses,
+            time_ns=graph["time_ns"].tensor.cpu().numpy(),
+            T_BS=graph["T_BS"].tensor[0].double(),
+            edges=edges,
+            edge_kinds=edge_kinds,
+            metadata={
+                "source": "WindowMACVO",
+                "window_size": self.edge_window.size,
+            },
+        )
 
     @torch.inference_mode()
     def _skip_edge_from_match(self, a, b, match):
@@ -300,6 +332,7 @@ class WindowMACVO(MACVO):
             self.MapRefiner.elaborate_map(self.graph.frames)
         after = self.graph.frames.data["pose"].tensor.double().clone()
         reanchor_points(self.graph, list(range(len(before))), before, after)
+        self._capture_factor_snapshot(after)
         self._run_global_refinement(after)
         self.frame_cache.clear()
         self.edge_window._edges.clear()
@@ -307,6 +340,54 @@ class WindowMACVO(MACVO):
         self.terminated = True
 
     def save_window_diagnostics(self, folder):
+        folder = Path(folder)
+        snapshot = getattr(self, "_factor_snapshot", None)
+        if self.global_refine and snapshot is not None:
+            try:
+                np.save(
+                    folder / "poses_before_global.npy",
+                    sensor_to_body_trajectory(
+                        snapshot.initial_sensor_poses,
+                        snapshot.time_ns,
+                        snapshot.T_BS,
+                    ),
+                )
+                factor_path = folder / "global_factors.npz"
+                save_factor_archive(factor_path, snapshot)
+                provenance_path = folder / "run_provenance.json"
+                provenance = (
+                    json.loads(provenance_path.read_text(encoding="utf-8"))
+                    if provenance_path.is_file()
+                    else {}
+                )
+                self.artifact_record = {
+                    "status": "saved",
+                    "schema_version": SCHEMA_VERSION,
+                    "poses": "poses_before_global.npy",
+                    "factors": "global_factors.npz",
+                    "factor_bytes": factor_path.stat().st_size,
+                    "source_id": snapshot.metadata["source_id"],
+                    "git_commit": provenance.get("git_commit"),
+                    "pose_count": len(snapshot.initial_sensor_poses),
+                    "edge_count": len(snapshot.edges),
+                    "observation_count": sum(
+                        len(edge.points_a) for edge in snapshot.edges
+                    ),
+                }
+                self._factor_snapshot = None
+            except Exception as error:
+                self.artifact_record = {
+                    "status": "failed",
+                    "reason": str(error),
+                }
+        elif self.global_refine and getattr(
+            self, "artifact_record", {}
+        ).get("status") == "pending":
+            self.artifact_record = {
+                "status": "unavailable",
+                "reason": "factor snapshot was not captured",
+            }
+
         payload = {
             "window_size": self.edge_window.size, "skip_matching": self.skip_matching,
             "marginalization": False, "pose_only": True,
@@ -316,7 +397,24 @@ class WindowMACVO(MACVO):
             "inactive_edges": self.inactive_edge_count,
             "retained_tensor_bytes": self.retained_tensor_bytes,
             "global_refinement": self.global_record,
+            "artifacts": getattr(
+                self,
+                "artifact_record",
+                {"status": "disabled" if not self.global_refine else "unavailable"},
+            ),
             "windows": self.window_records,
         }
-        Path(folder, "window_diagnostics.json").write_text(
+        (folder / "window_diagnostics.json").write_text(
             json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8")
+        (folder / "global_refinement.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "global_refinement": self.global_record,
+                    "artifacts": payload["artifacts"],
+                },
+                indent=2,
+                allow_nan=False,
+            ),
+            encoding="utf-8",
+        )

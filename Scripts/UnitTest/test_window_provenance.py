@@ -26,6 +26,10 @@ class ProvenanceTests(unittest.TestCase):
             meta = list(Path(tmp).glob("*/*/run_provenance.json"))
             self.assertEqual(len(meta), 1, result.stderr)
             self.assertEqual(json.loads(meta[0].read_text())["status"], "failed")
+            saved_config = yaml.safe_load(
+                Path(meta[0].parent, "config.yaml").read_text()
+            )
+            self.assertIn("Preprocess", saved_config)
 
 
 if __name__ == "__main__":

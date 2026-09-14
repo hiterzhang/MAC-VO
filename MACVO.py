@@ -123,6 +123,7 @@ if __name__ == "__main__":
         "Project": project_name,
         "Odometry": odomcfg_dict,
         "Data": {"args": datacfg_dict, "end_idx": args.seq_to, "start_idx": args.seq_from},
+        "Preprocess": cfg_dict["Preprocess"],
     }
 
     # Setup logging and visualization

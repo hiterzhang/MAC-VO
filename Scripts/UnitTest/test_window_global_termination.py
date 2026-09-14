@@ -3,12 +3,14 @@ import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+import numpy as np
 import pypose as pp
 import torch
 
 from Module.Map import FrameNode, MatchObs, PointNode, VisualMap
+from Module.Optimization.FactorArchive import load_factor_archive
 from Module.Optimization.GlobalPoseICP import GlobalPoseResult
 from Module.Optimization.WindowICP import Edge, EdgeWindow
 from Odometry.WindowMACVO import WindowMACVO
@@ -77,6 +79,89 @@ def make_system():
 
 
 class WindowGlobalTerminationTests(unittest.TestCase):
+    def test_termination_snapshots_interpolated_poses_before_global_writeback(self):
+        system, _, _ = make_system()
+        interpolated = system.graph.frames.data["pose"].tensor.double().clone()
+        refined = interpolated.clone()
+        refined[1, 0] += 0.2
+        system.terminated = False
+        system.Optimizer = SimpleNamespace(optimize_res=None, terminate=Mock())
+        system.MapRefiner = SimpleNamespace(elaborate_map=Mock())
+        system.frame_cache = {}
+
+        with patch.object(system, "_run_global_refinement") as refine:
+            refine.side_effect = lambda before: system.graph.frames.data[
+                "pose"
+            ].tensor.copy_(refined.float())
+            system.terminate()
+
+        self.assertTrue(torch.equal(
+            system._factor_snapshot.initial_sensor_poses, interpolated
+        ))
+
+    def test_save_diagnostics_writes_reusable_artifacts(self):
+        system, _, _ = make_system()
+        system.skip_matching = True
+        system.window_huber_delta = 3.0
+        system.window_records = []
+        poses = system.graph.frames.data["pose"].tensor.double().clone()
+        system._capture_factor_snapshot(poses)
+
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "run_provenance.json").write_text(
+                '{"git_commit":"abc"}', encoding="utf-8"
+            )
+            system.save_window_diagnostics(directory)
+            before = np.load(Path(directory, "poses_before_global.npy"))
+            archive = load_factor_archive(Path(directory, "global_factors.npz"))
+            payload = json.loads(
+                Path(directory, "global_refinement.json").read_text()
+            )
+
+        self.assertEqual(before.shape, (3, 8))
+        self.assertTrue(torch.equal(archive.initial_sensor_poses, poses))
+        self.assertEqual(payload["artifacts"]["status"], "saved")
+        self.assertEqual(payload["artifacts"]["git_commit"], "abc")
+        self.assertIsNone(system._factor_snapshot)
+
+    def test_serialization_failure_is_reported_and_keeps_snapshot(self):
+        system, _, _ = make_system()
+        system.skip_matching = True
+        system.window_huber_delta = 3.0
+        system.window_records = []
+        system._capture_factor_snapshot(
+            system.graph.frames.data["pose"].tensor.double()
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            with patch(
+                "Odometry.WindowMACVO.save_factor_archive",
+                side_effect=OSError("disk full"),
+            ):
+                system.save_window_diagnostics(directory)
+            payload = json.loads(
+                Path(directory, "global_refinement.json").read_text()
+            )
+
+            self.assertTrue(Path(directory, "window_diagnostics.json").is_file())
+            self.assertFalse(Path(directory, "global_factors.npz").exists())
+        self.assertEqual(payload["artifacts"]["status"], "failed")
+        self.assertIn("disk full", payload["artifacts"]["reason"])
+        self.assertIsNotNone(system._factor_snapshot)
+
+    def test_disabled_refinement_writes_no_factor_artifacts(self):
+        system, _, _ = make_system()
+        system.global_refine = False
+        system.skip_matching = True
+        system.window_huber_delta = 3.0
+        system.window_records = []
+
+        with tempfile.TemporaryDirectory() as directory:
+            system.save_window_diagnostics(directory)
+
+            self.assertFalse(Path(directory, "poses_before_global.npy").exists())
+            self.assertFalse(Path(directory, "global_factors.npz").exists())
+
     def test_saved_diagnostics_include_global_summary(self):
         system, _, _ = make_system()
         system.skip_matching = True
