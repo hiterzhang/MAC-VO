@@ -15,7 +15,9 @@ from Module.Optimization.WindowICP import Edge
 
 
 SCHEMA_VERSION = 1
-KNOWN_EDGE_KINDS = frozenset({"adjacent", "skip2", "gap5", "gap10"})
+KNOWN_EDGE_KINDS = frozenset({
+    "adjacent", "skip2", "gap5", "gap10", "proximity"
+})
 _ARCHIVE_FIELDS = frozenset({
     "schema_version",
     "edge_a",

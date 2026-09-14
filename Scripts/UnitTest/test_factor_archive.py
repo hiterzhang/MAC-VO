@@ -74,6 +74,16 @@ class FactorArchiveTests(unittest.TestCase):
         self.assertEqual(loaded.edge_kinds, ("adjacent", "gap5"))
         self.assertEqual(loaded.metadata, archive.metadata)
 
+    def test_proximity_edge_kind_round_trips_in_schema_one(self):
+        archive = make_archive([make_edge(0, 5)], ["proximity"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "proximity.npz")
+            save_factor_archive(path, archive)
+            loaded = load_factor_archive(path)
+
+        self.assertEqual(loaded.edge_kinds, ("proximity",))
+
     def test_merge_rejects_duplicate_edge_key(self):
         left = make_archive([make_edge(0, 5)], ["gap5"])
         right = make_archive([make_edge(0, 5)], ["gap5"])
