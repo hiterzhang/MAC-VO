@@ -396,6 +396,21 @@ PYTHONPATH=. .venv/bin/python Scripts/Experiment/CompareCovisibilityICP.py \
 
 输出四组严格同源结果：`before_global`、`short`、`short+gap5`和`short+proximity`。基础闸门要求默认Huber=3时proximity ATE低于short-only；选择器优势还要求ATE不高于固定gap-5，且proximity边数不超过实际gap-5边预算。零条通过验证的proximity边也是有效实验结果，不自动放宽阈值。
 
+#### 原V203困难片段结果
+
+原片段V203 `[1095,1215)`复用同一`poses_before_global.npy`和短程归档完成动态共视验证。结果目录为`Results/CovisibilityICP_V203_original/20260914_195312_548f2c`，版本化指标见[dynamic_covisibility_v203_1095_1215.csv](validation/dynamic_covisibility_v203_1095_1215.csv)。源因子、源轨迹哈希、120个时间戳和固定锚均通过严格校验。
+
+| 模式 | 新增边 | ATE RMSE (m) | RTE RMSE | ROE RMSE (°) | RPE RMSE |
+|---|---:|---:|---:|---:|---:|
+| 全局优化前 | 0 | 0.138230 | 0.020222 | 0.415005 | 0.022668 |
+| short | 0 | 0.137488 | 0.019486 | 0.403545 | 0.021884 |
+| short + gap-5 | 23 | 0.136785 | 0.019013 | 0.400499 | 0.021429 |
+| short + proximity | 5 | 0.137186 | 0.019438 | 0.408617 | 0.021899 |
+
+动态共视评估了231个几何候选，21个目标中12个进入真实双向匹配，最终接受5条边、574个观测；7条候选因正反向一致内点不足被拒绝，9个目标没有通过几何门槛的候选。接受边跨度为15或20帧。首次失败运行已完成24次Pass A并生成69,510,599字节缓存；修复CPU缓存深度与GPU关键点的设备边界后，正式运行复用该缓存，仅执行12次Pass B，耗时16.32秒。
+
+proximity ATE相对short下降0.22%，因此基础动态共视闸门通过；但比固定gap-5高0.29%，选择器优势闸门未通过。当前原片段证据说明少量几何筛选边能够改善ATE，但候选仍集中在15至20帧跨度，尚未验证真正的远距离重访优势。
+
 ## 每次运行的追溯信息
 
 - config.yaml：本次Odometry配置。
