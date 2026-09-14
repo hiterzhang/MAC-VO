@@ -8,7 +8,14 @@ import pypose as pp
 import torch
 
 from Odometry.MACVO import MACVO
-from Module.Optimization.WindowICP import Edge, EdgeWindow, optimize_window, normalized_pose
+from Module.Optimization.GlobalPoseICP import optimize_global_pose_graph
+from Module.Optimization.WindowICP import (
+    Edge,
+    EdgeWindow,
+    edge_tensor_bytes,
+    optimize_window,
+    normalized_pose,
+)
 from Utility.Point import pixel2point_NED, filterPointsInRange
 from Utility.PrettyPrint import Logger
 
@@ -254,6 +261,33 @@ class WindowMACVO(MACVO):
         # let termination interpolation overwrite its refined pose later.
         self.graph.frames.data["need_interp"][torch.tensor(ids[1:])] = False
 
+    def _run_global_refinement(self, before):
+        if not getattr(self, "global_refine", False):
+            self.global_record = {"status": "disabled"}
+            self.inactive_edge_count = 0
+            self.retained_tensor_bytes = 0
+            return
+
+        edges = self._global_edges()
+        self.inactive_edge_count = len(self.inactive_edges)
+        self.retained_tensor_bytes = sum(
+            edge_tensor_bytes(edge) for edge in edges
+        )
+        result = optimize_global_pose_graph(
+            before,
+            edges,
+            max_iters=self.global_iterations,
+            huber_delta=self.global_huber_delta,
+        )
+        self.global_record = result.diagnostics
+        if result.diagnostics["status"] != "refined":
+            return
+
+        reanchor_points(
+            self.graph, list(range(len(before))), before, result.poses
+        )
+        self.graph.frames.data["pose"].tensor[:] = result.poses.float()
+
     def terminate(self):
         if self.terminated:
             return
@@ -265,8 +299,10 @@ class WindowMACVO(MACVO):
             self.MapRefiner.elaborate_map(self.graph.frames)
         after = self.graph.frames.data["pose"].tensor.double().clone()
         reanchor_points(self.graph, list(range(len(before))), before, after)
+        self._run_global_refinement(after)
         self.frame_cache.clear()
         self.edge_window._edges.clear()
+        getattr(self, "inactive_edges", {}).clear()
         self.terminated = True
 
     def save_window_diagnostics(self, folder):
@@ -275,6 +311,10 @@ class WindowMACVO(MACVO):
             "marginalization": False, "pose_only": True,
             "initializer": "synchronous TwoFrame_PGO ICP",
             "huber_delta_whitened": self.window_huber_delta,
+            "global_refine": self.global_refine,
+            "inactive_edges": self.inactive_edge_count,
+            "retained_tensor_bytes": self.retained_tensor_bytes,
+            "global_refinement": self.global_record,
             "windows": self.window_records,
         }
         Path(folder, "window_diagnostics.json").write_text(
