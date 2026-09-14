@@ -3,7 +3,13 @@ import unittest
 import torch
 import pypose as pp
 
-from Module.Optimization.WindowICP import Edge, EdgeWindow, factor_system, optimize_window
+from Module.Optimization.WindowICP import (
+    Edge,
+    EdgeWindow,
+    edge_tensor_bytes,
+    factor_system,
+    optimize_window,
+)
 
 
 def fixture():
@@ -73,6 +79,27 @@ class WindowICPTests(unittest.TestCase):
         self.assertEqual(len(window.edges), 5)
         window.advance(9)
         self.assertEqual(len(window.edges), 0)
+
+    def test_window_advance_returns_evicted_edges(self):
+        _, _, edges = fixture()
+        window = EdgeWindow(5)
+        for edge in edges:
+            window.add(edge)
+
+        evicted = window.advance(5)
+
+        self.assertEqual([(edge.a, edge.b) for edge in evicted], [(0, 1), (0, 2)])
+        self.assertTrue(all(edge.a >= 1 for edge in window.edges))
+
+    def test_edge_tensor_bytes_counts_only_observation_payload(self):
+        _, _, edges = fixture()
+        edge = edges[0]
+        expected = sum(
+            value.numel() * value.element_size()
+            for value in (edge.points_a, edge.points_b, edge.cov_a, edge.cov_b)
+        )
+
+        self.assertEqual(edge_tensor_bytes(edge), expected)
 
     def test_disconnected_window_rejected_without_mutation(self):
         _, poses, edges = fixture()

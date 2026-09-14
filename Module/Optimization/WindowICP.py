@@ -35,6 +35,13 @@ class Edge:
                 raise ValueError("Covariance must be positive definite")
 
 
+def edge_tensor_bytes(edge):
+    return sum(
+        value.numel() * value.element_size()
+        for value in (edge.points_a, edge.points_b, edge.cov_a, edge.cov_b)
+    )
+
+
 class EdgeWindow:
     def __init__(self, size=5):
         if not isinstance(size, int) or not 2 <= size <= 5:
@@ -51,7 +58,12 @@ class EdgeWindow:
 
     def advance(self, current):
         first = current - self.size + 1
+        evicted = [
+            edge for _, edge in sorted(self._edges.items())
+            if not (first <= edge.a < edge.b <= current)
+        ]
         self._edges = {k: e for k, e in self._edges.items() if first <= e.a < e.b <= current}
+        return evicted
 
 
 def skew(v):
