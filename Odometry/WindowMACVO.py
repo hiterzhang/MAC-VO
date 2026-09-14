@@ -138,6 +138,9 @@ class WindowMACVO(MACVO):
         super().initialize(frame0)
         self.frame_cache[0] = (frame0, self.prev_keyframe[2])
 
+    def _after_window_step(self, frame, depth, adjacent, skip):
+        return None
+
     def _edge(self, a, b, uv0, uv1, d0, d1, cov0, cov1, K0, K1):
         p0 = pixel2point_NED(uv0.cpu(), d0.cpu(), K0.cpu()).double()
         p1 = pixel2point_NED(uv1.cpu(), d1.cpu(), K1.cpu()).double()
@@ -279,6 +282,7 @@ class WindowMACVO(MACVO):
             "cached_edges": len(self.edge_window.edges),
         })
         self.window_records.append(record)
+        self._after_window_step(frame1, depth1, adjacent, skip)
         for callback in self.on_optimize_writeback:
             callback(self)
 

@@ -151,6 +151,9 @@ if __name__ == "__main__":
     if system_type == "WindowMACVO":
         from Odometry.WindowMACVO import WindowMACVO
         system_class = WindowMACVO
+    elif system_type == "OnlineLoopWindowMACVO":
+        from Odometry.OnlineLoopWindowMACVO import OnlineLoopWindowMACVO
+        system_class = OnlineLoopWindowMACVO
     elif system_type == "MACVO":
         system_class = MACVO
     else:
