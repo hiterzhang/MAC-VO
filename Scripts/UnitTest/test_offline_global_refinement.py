@@ -187,6 +187,16 @@ class OfflineGlobalRefinementTests(unittest.TestCase):
         self.assertEqual(args.iterations, 5)
         self.assertEqual(args.huber, 3.0)
 
+    def test_cli_accepts_proximity_edge_kind(self):
+        args = build_parser().parse_args([
+            "--space", "/tmp/result",
+            "--long-factors", "proximity_factors.npz",
+            "--edge-kinds", "proximity",
+            "--output-tag", "proximity",
+        ])
+
+        self.assertEqual(args.edge_kinds, ["proximity"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -373,6 +373,29 @@ v0.3共汇总237条因子，其中230条inactive、7条active，总计43885个�
 
 Huber 5.0能够在该片段降低ATE，但这是使用同一困难片段选择参数的探索结果，不能替代预先设定的默认闸门，也不足以证明完整V203泛化。当前证据支持“真实长程边能够提供有效低频信息”，同时说明`t-10`边的协方差标定或鲁棒权重仍需单独校准；下一步应优先离线分析gap-10残差/协方差分布，而不是立即增加更复杂的Schur后端。
 
+### 动态共视 proximity 实验
+
+动态共视版本与固定gap实验严格区分。固定gap按时间选择`t-5/t-10`；动态版本对每个计划目标从全部合格历史关键帧中，根据当前`poses_before_global`、缓存深度、双向投影共视率和深度一致性选取最多一个候选，再使用真实正反向FlowFormerCov匹配验证。
+
+离线生成命令：
+
+~~~bash
+PYTHONPATH=. .venv/bin/python Scripts/Experiment/GenerateProximityICP.py \
+  --space /absolute/path/to/result-leaf
+~~~
+
+固定batch=3槽位为目标立体、历史到当前正向匹配、当前到历史反向匹配。候选必须通过正反向闭环误差、深度有效率、4×6网格覆盖和完整协方差Mahalanobis内点检查，才会写入`proximity_factors.npz`。候选评分、所有拒绝原因及匹配统计分别保存在`covisibility_candidates.json`和`proximity_generation.json`。
+
+原V203困难片段的一键复用对比：
+
+~~~bash
+PYTHONPATH=. .venv/bin/python Scripts/Experiment/CompareCovisibilityICP.py \
+  --space /home/zzh/MACVO/Results/LongRangeICP_V203_short/20260914_175119_fa00a4/source/MACVO-Fast-WindowICP5-Global@V203/09_14_175121 \
+  --result-root /home/zzh/MACVO/Results/CovisibilityICP_V203_original
+~~~
+
+输出四组严格同源结果：`before_global`、`short`、`short+gap5`和`short+proximity`。基础闸门要求默认Huber=3时proximity ATE低于short-only；选择器优势还要求ATE不高于固定gap-5，且proximity边数不超过实际gap-5边预算。零条通过验证的proximity边也是有效实验结果，不自动放宽阈值。
+
 ## 每次运行的追溯信息
 
 - config.yaml：本次Odometry配置。

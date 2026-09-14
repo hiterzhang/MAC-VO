@@ -36,7 +36,7 @@ def build_parser():
     parser.add_argument(
         "--edge-kinds",
         nargs="+",
-        choices=("gap5", "gap10"),
+        choices=("gap5", "gap10", "proximity"),
     )
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--huber", type=float, default=3.0)
