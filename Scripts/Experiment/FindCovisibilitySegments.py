@@ -34,6 +34,14 @@ def build_parser():
     parser.add_argument("--max-distance", type=float, default=2.0)
     parser.add_argument("--max-angle-deg", type=float, default=30.0)
     parser.add_argument("--min-revisit-pairs", type=int, default=3)
+    parser.add_argument(
+        "--exclude-range",
+        nargs=2,
+        type=int,
+        action="append",
+        default=[],
+        metavar=("START", "END"),
+    )
     parser.add_argument("--output-root", type=Path, required=True)
     return parser
 
@@ -118,6 +126,7 @@ def find_segments(
     max_distance=2.0,
     max_angle_deg=30.0,
     min_pairs=3,
+    exclude_ranges=(),
 ):
     gt = torch.as_tensor(gt).double()
     estimate = torch.as_tensor(estimate).double()
@@ -133,6 +142,9 @@ def find_segments(
     candidates = []
     for start in range(len(gt) - window + 1):
         end = start + window
+        if any(start < excluded_end and excluded_start < end
+               for excluded_start, excluded_end in exclude_ranges):
+            continue
         pairs = _rectangle_sum(prefix, start, end)
         if pairs < min_pairs:
             continue
@@ -208,6 +220,7 @@ def main(argv=None):
         max_distance=args.max_distance,
         max_angle_deg=args.max_angle_deg,
         min_pairs=args.min_revisit_pairs,
+        exclude_ranges=args.exclude_range,
     )
     selected = write_segment_results(args.output_root, segments)
     print(json.dumps(selected, indent=2, allow_nan=False))

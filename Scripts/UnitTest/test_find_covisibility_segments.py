@@ -74,6 +74,25 @@ class FindCovisibilitySegmentsTests(unittest.TestCase):
 
         self.assertEqual(segments, [])
 
+    def test_excluded_range_removes_every_overlapping_window(self):
+        gt = pp.identity_SE3(12, dtype=torch.float64).tensor()
+
+        segments = find_segments(
+            gt,
+            gt.clone(),
+            window=4,
+            min_temporal_gap=2,
+            max_distance=2.0,
+            max_angle_deg=30.0,
+            min_pairs=1,
+            exclude_ranges=[(4, 8)],
+        )
+
+        self.assertTrue(all(
+            segment.end <= 4 or segment.start >= 8
+            for segment in segments
+        ))
+
     def test_result_writer_uses_exact_half_open_selected_range(self):
         gt = pp.identity_SE3(8, dtype=torch.float64).tensor()
         segments = find_segments(
