@@ -12,7 +12,7 @@ from Module.Optimization.LongRangeICP import (
 )
 from Module.Optimization.MatchICP import MatchEdgeBuildResult
 from Module.Optimization.WindowICP import Edge
-from Scripts.Experiment.GenerateLongRangeICP import build_parser
+from Scripts.Experiment.GenerateLongRangeICP import build_parser, optional_index
 
 
 class FakeSequence:
@@ -184,6 +184,10 @@ class LongRangeICPTests(unittest.TestCase):
         args = build_parser().parse_args(["--space", "/tmp/result"])
 
         self.assertEqual(args.output, "long_factors_gap5_10.npz")
+
+    def test_saved_null_sequence_bound_becomes_none(self):
+        self.assertIsNone(optional_index(SimpleNamespace()))
+        self.assertEqual(optional_index(12), 12)
 
 
 if __name__ == "__main__":

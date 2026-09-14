@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -36,6 +37,10 @@ def file_sha256(path):
     return digest.hexdigest()
 
 
+def optional_index(value):
+    return None if isinstance(value, SimpleNamespace) else value
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
     space = Sandbox.load(args.space)
@@ -51,7 +56,10 @@ def main(argv=None):
     sequence = smart_transform(
         SequenceBase[StereoFrame].instantiate(
             cfg.Data.args.type, cfg.Data.args.args
-        ).clip(cfg.Data.start_idx, cfg.Data.end_idx),
+        ).clip(
+            optional_index(cfg.Data.start_idx),
+            optional_index(cfg.Data.end_idx),
+        ),
         cfg.Preprocess,
     )
     if len(sequence) != len(source.initial_sensor_poses):
