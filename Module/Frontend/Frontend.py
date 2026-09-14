@@ -350,8 +350,12 @@ class CUDAGraph_FlowFormerCovFrontend(FlowFormerCovFrontend):
     FlowformerCov Frontend, but using CUDAGraph acceleration to improve inference speed.
     """
     
+    instances_created = 0
+    graphs_captured = 0
+
     def __init__(self, config: SimpleNamespace):
         super().__init__(config)
+        type(self).instances_created += 1
         
         self.cuda_graph: CUDAGraphHandler | None = None
         assert "cuda" in self.config.device.lower(), "CUDAGraph_FlowFormerCovFrontend can only run on CUDA device."
@@ -473,6 +477,7 @@ class CUDAGraph_FlowFormerCovFrontend(FlowFormerCovFrontend):
                 static_input={"input_A": static_input_A, "input_B": static_input_B},
                 static_ouput={"flow": static_output, "flow_cov": static_output_cov}
             )
+            type(self).graphs_captured += 1
             Logger.write("info", "CUDAGraph Built. Will use CUDAGraph for accelerated inference.")
             
             return output_val, output_cov
