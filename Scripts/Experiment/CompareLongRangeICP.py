@@ -16,8 +16,9 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from Module.Optimization.FactorArchive import load_factor_archive
-from Scripts.Experiment.GenerateLongRangeICP import file_sha256
+from Scripts.Experiment.GenerateLongRangeICP import file_sha256, optional_index
 from Scripts.Experiment.RefineGlobalPoseICP import evaluate_pose_file
+from Utility.Sandbox import Sandbox
 
 
 MODES = ("before_global", "short", "gap5", "gap5_10")
@@ -117,6 +118,20 @@ def discover_result_space(root):
             f"Result run is not complete: {provenance_files[0].parent}"
         )
     return provenance_files[0].parent
+
+
+def source_run_metadata(space):
+    space = Path(space)
+    config = Sandbox.load(space).config
+    provenance = json.loads(
+        (space / "run_provenance.json").read_text(encoding="utf-8")
+    )
+    return {
+        "sequence": config.Data.args.name,
+        "frame_from": optional_index(config.Data.start_idx),
+        "frame_to": optional_index(config.Data.end_idx),
+        "seed": provenance.get("seed"),
+    }
 
 
 def _manifest_path(root):
@@ -301,12 +316,8 @@ def main(argv=None):
         raise FileNotFoundError(f"Source result is missing artifacts: {missing}")
     source_pose_sha256 = file_sha256(space / "poses.npy")
     _run_offline_commands(space)
-    manifest = {
+    manifest = source_run_metadata(space) | {
         "source_space": str(space.resolve()),
-        "sequence": args.sequence,
-        "frame_from": args.seq_from,
-        "frame_to": args.seq_to,
-        "seed": args.seed,
         "source_factor_sha256": file_sha256(space / "global_factors.npz"),
         "long_factor_sha256": file_sha256(
             space / "long_factors_gap5_10.npz"

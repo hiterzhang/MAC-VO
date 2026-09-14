@@ -7,6 +7,7 @@ import unittest
 import numpy as np
 import pypose as pp
 import torch
+import yaml
 
 from Module.Optimization.FactorArchive import (
     FactorArchive,
@@ -18,6 +19,7 @@ from Scripts.Experiment.CompareLongRangeICP import (
     build_parser,
     discover_result_space,
     stage_one_passed,
+    source_run_metadata,
     verify_comparison_space,
     write_comparison_artifacts,
 )
@@ -166,6 +168,31 @@ class CompareLongRangeICPTests(unittest.TestCase):
         args = build_parser().parse_args(["--verify-space", "/tmp/result"])
 
         self.assertEqual(args.verify_space, Path("/tmp/result"))
+
+    def test_source_metadata_comes_from_saved_run_not_cli_defaults(self):
+        with tempfile.TemporaryDirectory() as directory:
+            space = Path(directory)
+            (space / "config.yaml").write_text(yaml.safe_dump({
+                "Project": "MACVO@V203",
+                "Data": {
+                    "args": {"name": "V203", "type": "EuRoC", "args": {}},
+                    "start_idx": 1095,
+                    "end_idx": 1215,
+                },
+            }))
+            (space / "run_provenance.json").write_text(json.dumps({
+                "status": "complete",
+                "seed": 7,
+            }))
+
+            metadata = source_run_metadata(space)
+
+        self.assertEqual(metadata, {
+            "sequence": "V203",
+            "frame_from": 1095,
+            "frame_to": 1215,
+            "seed": 7,
+        })
 
 
 if __name__ == "__main__":
