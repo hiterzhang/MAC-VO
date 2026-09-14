@@ -36,14 +36,25 @@ def reanchor_points(graph, frame_ids, before, after):
 
 class WindowMACVO(MACVO):
     def __init__(self, *, window_size=5, skip_matching=True,
-                 window_iterations=10, window_huber_delta=3.0, **kwargs):
+                 window_iterations=10, window_huber_delta=3.0,
+                 global_refine=False, global_iterations=5,
+                 global_huber_delta=3.0, **kwargs):
         super().__init__(**kwargs)
         self.edge_window = EdgeWindow(window_size)
         self.skip_matching = skip_matching
         self.window_iterations = window_iterations
         self.window_huber_delta = window_huber_delta
+        self.global_refine = global_refine
+        self.global_iterations = global_iterations
+        self.global_huber_delta = global_huber_delta
         self.frame_cache = {}
         self.window_records = []
+        self.inactive_edges = {}
+        self.global_record = {
+            "status": "pending" if global_refine else "disabled"
+        }
+        self.retained_tensor_bytes = 0
+        self.inactive_edge_count = 0
 
     @classmethod
     def from_config(cls, cfg):
@@ -58,20 +69,32 @@ class WindowMACVO(MACVO):
             raise ValueError("Window v1 supports CovarianceSanityFilter")
         if c.args.window_iterations < 1 or c.args.window_huber_delta <= 0:
             raise ValueError("Invalid window solver settings")
+        if getattr(c.args, "global_iterations", 5) < 1:
+            raise ValueError("Invalid global solver iterations")
+        if getattr(c.args, "global_huber_delta", 3.0) <= 0:
+            raise ValueError("Invalid global Huber delta")
         return super().from_config(cfg)
 
     @classmethod
     def is_valid_config(cls, config):
         assert config is not None
+        normalized_args = SimpleNamespace(**vars(config.args))
+        for key, value in {
+            "global_refine": False,
+            "global_iterations": 5,
+            "global_huber_delta": 3.0,
+        }.items():
+            if not hasattr(normalized_args, key):
+                setattr(normalized_args, key, value)
         base_config = SimpleNamespace(**vars(config))
         base_config.args = SimpleNamespace(**{
-            key: getattr(config.args, key) for key in (
+            key: getattr(normalized_args, key) for key in (
                 "device", "num_point", "edgewidth", "match_cov_default",
                 "profile", "mapping",
             )
         })
         super().is_valid_config(base_config)
-        cls._enforce_config_spec(config.args, {
+        cls._enforce_config_spec(normalized_args, {
             "device": lambda value: isinstance(value, str)
                 and ("cuda" in value or value == "cpu"),
             "num_point": lambda value: isinstance(value, int) and value > 0,
@@ -84,6 +107,10 @@ class WindowMACVO(MACVO):
             "skip_matching": lambda value: isinstance(value, bool),
             "window_iterations": lambda value: isinstance(value, int) and value >= 1,
             "window_huber_delta": lambda value: isinstance(value, (float, int))
+                and value > 0.0,
+            "global_refine": lambda value: isinstance(value, bool),
+            "global_iterations": lambda value: isinstance(value, int) and value >= 1,
+            "global_huber_delta": lambda value: isinstance(value, (float, int))
                 and value > 0.0,
         })
 
@@ -119,6 +146,19 @@ class WindowMACVO(MACVO):
         return self.Frontend.estimate_window(
             frame_t2, frame0.stereo, frame1.stereo
         )
+
+    def _retain_evicted_edges(self, edges):
+        if not self.global_refine:
+            return
+        for edge in edges:
+            self.inactive_edges[(edge.a, edge.b)] = edge
+
+    def _global_edges(self):
+        edges = dict(self.inactive_edges)
+        edges.update({
+            (edge.a, edge.b): edge for edge in self.edge_window.edges
+        })
+        return [edges[key] for key in sorted(edges)]
 
     @torch.inference_mode()
     def _skip_edge_from_match(self, a, b, match):
@@ -164,7 +204,8 @@ class WindowMACVO(MACVO):
         self.frame_cache[b] = (frame1, self.prev_keyframe[2])
         first = max(0, b-self.edge_window.size+1)
         self.frame_cache = {i: value for i, value in self.frame_cache.items() if i >= first}
-        self.edge_window.advance(b)
+        evicted = self.edge_window.advance(b)
+        self._retain_evicted_edges(evicted)
 
         obs = self.graph.match[before_match:]
         adjacent = self._edge(
