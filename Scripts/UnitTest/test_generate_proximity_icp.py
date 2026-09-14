@@ -5,6 +5,7 @@ import numpy as np
 import pypose as pp
 import torch
 
+from Module.Frontend.StereoDepth import IStereoDepth
 from Module.Optimization.CovisibilitySelector import CovisibilityMetrics
 from Module.Optimization.FactorArchive import FactorArchive
 from Module.Optimization.ProximityFactorStore import ProximityFactorRecord
@@ -38,7 +39,8 @@ class FakeCache:
         self.metadata = {"source_id": source.metadata["source_id"]}
 
     def depth_output(self, frame_id):
-        return SimpleNamespace(frame_id=frame_id)
+        values = torch.ones(1, 1, 2, 2)
+        return IStereoDepth.Output(depth=values, cov=values.clone())
 
 
 def source_archive(count=26):

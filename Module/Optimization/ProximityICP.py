@@ -9,6 +9,7 @@ import pypose as pp
 import torch
 import torch.nn.functional as F
 
+from Module.Frontend.StereoDepth import IStereoDepth
 from Module.Optimization.MatchICP import build_edge_from_correspondences
 from Module.Optimization.ProximityFactorStore import ProximityFactorRecord
 from Module.Optimization.ProximityFactorStore import PersistentFactorStore
@@ -79,6 +80,21 @@ class ProximityGenerationResult:
     candidate_records: list
     validation_records: list
     diagnostics: dict
+
+
+def depth_output_to_device(output, device):
+    def move(value):
+        return None if value is None else value.to(device=device)
+
+    return IStereoDepth.Output(
+        depth=move(output.depth),
+        disparity=move(getattr(output, "disparity", None)),
+        cov=move(getattr(output, "cov", None)),
+        mask=move(getattr(output, "mask", None)),
+        disparity_uncertainty=move(
+            getattr(output, "disparity_uncertainty", None)
+        ),
+    )
 
 
 def sample_map_bilinear(pixel_uv, value_map):
@@ -391,7 +407,9 @@ def generate_proximity_archive(
             backward=backward,
             source_frame=source_frame,
             target_frame=target_frame,
-            source_depth=cache.depth_output(selected.source),
+            source_depth=depth_output_to_device(
+                cache.depth_output(selected.source), device
+            ),
             target_depth=target_depth,
             poses=source_archive.initial_sensor_poses,
             frontend=frontend,

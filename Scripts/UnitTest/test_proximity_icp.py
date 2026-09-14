@@ -12,6 +12,7 @@ from Module.Frontend.StereoDepth import IStereoDepth
 from Module.Optimization.CovisibilitySelector import CovisibilityMetrics
 from Module.Optimization.ProximityICP import (
     ProximityValidationConfig,
+    depth_output_to_device,
     filter_mahalanobis_inliers,
     validate_proximity_match,
 )
@@ -120,6 +121,22 @@ def validation_inputs(**updates):
 
 
 class ProximityICPTests(unittest.TestCase):
+    def test_cached_depth_output_moves_all_available_maps_to_device(self):
+        source = depth()
+
+        moved = depth_output_to_device(source, "cpu")
+
+        self.assertEqual(moved.depth.device.type, "cpu")
+        self.assertEqual(moved.cov.device.type, "cpu")
+        self.assertTrue(torch.equal(moved.depth, source.depth))
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is unavailable")
+    def test_cached_cpu_depth_can_move_to_cuda_for_gpu_keypoints(self):
+        moved = depth_output_to_device(depth(), "cuda")
+
+        self.assertEqual(moved.depth.device.type, "cuda")
+        self.assertEqual(moved.cov.device.type, "cuda")
+
     def test_inverse_flows_pass_forward_backward_validation(self):
         result = validate_proximity_match(**validation_inputs())
 
