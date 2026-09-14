@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 import math
+from collections import Counter
+import time
 
 import pypose as pp
 import torch
@@ -9,6 +11,8 @@ import torch.nn.functional as F
 
 from Module.Optimization.MatchICP import build_edge_from_correspondences
 from Module.Optimization.ProximityFactorStore import ProximityFactorRecord
+from Module.Optimization.ProximityFactorStore import PersistentFactorStore
+from Module.Optimization.FactorArchive import trajectory_identity
 from Module.Optimization.WindowICP import Edge
 from Utility.Point import filterPointsInRange
 
@@ -67,6 +71,14 @@ class ProximityValidationResult:
     record: ProximityFactorRecord | None
     reason: str | None
     metrics: dict
+
+
+@dataclass(frozen=True)
+class ProximityGenerationResult:
+    archive: object
+    candidate_records: list
+    validation_records: list
+    diagnostics: dict
 
 
 def sample_map_bilinear(pixel_uv, value_map):
@@ -289,3 +301,138 @@ def validate_proximity_match(
         validation_metrics=metrics,
     )
     return ProximityValidationResult(record, None, metrics)
+
+
+def generate_proximity_archive(
+    *,
+    sequence,
+    source_archive,
+    cache,
+    frontend,
+    covisibility_selector,
+    keypoint_selector,
+    covariance_model,
+    num_point,
+    edge_width,
+    match_cov_default,
+    device,
+    validation_config,
+    validator=validate_proximity_match,
+):
+    start = time.perf_counter()
+    source_id = trajectory_identity(
+        source_archive.initial_sensor_poses,
+        source_archive.time_ns,
+        source_archive.T_BS,
+    )
+    if cache.metadata.get("source_id") != source_id:
+        raise ValueError("covisibility cache source identity mismatch")
+    if len(sequence) != len(source_archive.initial_sensor_poses):
+        raise ValueError("sequence and source archive frame counts differ")
+    frame_ids = [int(frame_id) for frame_id in cache.frame_ids.tolist()]
+    first = min(frame_ids)
+    min_gap = covisibility_selector.config.min_temporal_gap
+    targets = [frame_id for frame_id in frame_ids if frame_id - first >= min_gap]
+    store = PersistentFactorStore(source_archive)
+    candidate_records = []
+    validation_records = []
+    inference_failures = []
+    validation_rejections = Counter()
+    no_candidate_targets = 0
+    selected_candidates = 0
+    frontend_calls = 0
+
+    for target in targets:
+        history = [
+            frame_id for frame_id in frame_ids
+            if frame_id <= target - min_gap
+        ]
+        selected, evaluated = covisibility_selector.select(
+            target=target,
+            history=history,
+            accepted_pairs=store.keys,
+        )
+        for record in evaluated:
+            payload = record.as_dict()
+            payload["selected"] = bool(
+                selected is not None
+                and record.source == selected.source
+                and record.target == selected.target
+            )
+            candidate_records.append(payload)
+        if selected is None:
+            no_candidate_targets += 1
+            continue
+        selected_candidates += 1
+        source_frame = sequence[selected.source]
+        target_frame = sequence[selected.target]
+        for frame_id, frame in (
+            (selected.source, source_frame),
+            (selected.target, target_frame),
+        ):
+            if int(frame.stereo.frame_ns) != int(source_archive.time_ns[frame_id]):
+                raise ValueError(f"sequence timestamp mismatch at frame {frame_id}")
+        try:
+            target_depth, forward, backward = frontend.estimate_bidirectional(
+                source_frame.stereo, target_frame.stereo
+            )
+            frontend_calls += 1
+        except Exception as error:
+            frontend_calls += 1
+            inference_failures.append({
+                "source": selected.source,
+                "target": selected.target,
+                "reason": str(error),
+            })
+            continue
+        validation = validator(
+            candidate=selected,
+            forward=forward,
+            backward=backward,
+            source_frame=source_frame,
+            target_frame=target_frame,
+            source_depth=cache.depth_output(selected.source),
+            target_depth=target_depth,
+            poses=source_archive.initial_sensor_poses,
+            frontend=frontend,
+            keypoint_selector=keypoint_selector,
+            covariance_model=covariance_model,
+            num_point=num_point,
+            edge_width=edge_width,
+            match_cov_default=match_cov_default,
+            device=device,
+            config=validation_config,
+        )
+        validation_records.append({
+            "source": selected.source,
+            "target": selected.target,
+            "reason": validation.reason,
+            "metrics": validation.metrics,
+        })
+        if validation.record is None:
+            validation_rejections[validation.reason or "unknown"] += 1
+            continue
+        store.add(validation.record)
+
+    archive = store.to_archive()
+    diagnostics = {
+        "status": "generated" if store.records else "no_proximity_edges",
+        "targets": targets,
+        "candidate_evaluations": len(candidate_records),
+        "selected_candidates": selected_candidates,
+        "no_candidate_targets": no_candidate_targets,
+        "frontend_calls": frontend_calls,
+        "inference_failures": inference_failures,
+        "validation_rejections": dict(sorted(validation_rejections.items())),
+        "accepted_edges": len(store.records),
+        "observations": sum(
+            len(record.edge.points_a) for record in store.records
+        ),
+        "seconds": time.perf_counter() - start,
+    }
+    return ProximityGenerationResult(
+        archive,
+        candidate_records,
+        validation_records,
+        diagnostics,
+    )
