@@ -25,7 +25,10 @@ from Module.Optimization.AsyncPoseGraph import (
     PoseGraphSnapshot,
 )
 from Module.Optimization.CovisibilitySelector import CovisibilityMetrics
-from Module.Optimization.PairwiseICP import compress_edge_to_pose_factor
+from Module.Optimization.PairwiseICP import (
+    compress_edge_to_pose_factor,
+    linearize_edge_to_pose_factor,
+)
 from Module.Optimization.PoseGraph import (
     PoseGraphArchive,
     optimize_pose_graph,
@@ -72,6 +75,7 @@ class OnlineLoopWindowMACVO(WindowMACVO):
         self.skip_information_cap = float(pose_graph.skip_information_cap)
         self.switch_prior = float(pose_graph.switch_prior)
         self.compress_edge = compress_edge_to_pose_factor
+        self.linearize_edge = linearize_edge_to_pose_factor
         self.pose_factors = {}
         self.pose_graph_version = 0
         self.compression_records = []
@@ -145,12 +149,20 @@ class OnlineLoopWindowMACVO(WindowMACVO):
         key = (edge.a, edge.b, kind)
         if key in self.pose_factors:
             return False
-        result = self.compress_edge(
-            edge,
-            kind=kind,
-            max_iters=self.pairwise_iterations,
-            huber_delta=self.pairwise_huber_delta,
-        )
+        if kind == "loop":
+            result = self.compress_edge(
+                edge,
+                kind=kind,
+                max_iters=self.pairwise_iterations,
+                huber_delta=self.pairwise_huber_delta,
+            )
+        else:
+            result = self.linearize_edge(
+                edge,
+                self.graph.frames.data["pose"].tensor.double(),
+                kind=kind,
+                huber_delta=self.pairwise_huber_delta,
+            )
         self.compression_records.append({
             "a": edge.a,
             "b": edge.b,

@@ -51,6 +51,84 @@ def weighted_kabsch(points_a, points_b, covariance):
     return pp.from_matrix(matrix, pp.SE3_type).tensor()
 
 
+def _information_at_solution(
+    remapped,
+    poses,
+    huber_delta,
+    min_eigenvalue,
+    max_eigenvalue,
+    max_condition,
+):
+    residual, covariance, jacobian = factor_system(
+        poses, [0, 1], [remapped]
+    )
+    white_residual, white_jacobian = whiten(
+        residual, covariance, jacobian
+    )
+    weight = torch.clamp(
+        huber_delta / white_residual.norm(dim=-1).clamp_min(1e-15),
+        max=1.0,
+    ).sqrt()
+    A = (white_jacobian * weight[:, None, None]).reshape(-1, 6)
+    information = A.T @ A
+    information = 0.5 * (information + information.T)
+    eigenvalues, eigenvectors = torch.linalg.eigh(information)
+    raw_min = float(eigenvalues.min())
+    raw_max = float(eigenvalues.max())
+    if raw_min <= 0 or raw_max / raw_min > max_condition:
+        raise ValueError("pairwise ICP information is degenerate")
+    clamped = eigenvalues.clamp(min_eigenvalue, max_eigenvalue)
+    information = eigenvectors @ torch.diag(clamped) @ eigenvectors.T
+    return information, float(clamped.max() / clamped.min())
+
+
+def linearize_edge_to_pose_factor(
+    edge,
+    poses,
+    *,
+    kind,
+    huber_delta=3.0,
+    min_eigenvalue=1e-6,
+    max_eigenvalue=1e6,
+    max_condition=1e8,
+):
+    try:
+        pose = pp.SE3(torch.as_tensor(poses).double())
+        measurement = (pose[edge.a].Inv() @ pose[edge.b]).tensor()
+        remapped = Edge(
+            0, 1,
+            edge.points_a, edge.points_b,
+            edge.cov_a, edge.cov_b,
+        )
+        local = torch.stack([
+            pp.identity_SE3(dtype=torch.float64).tensor(), measurement
+        ])
+        information, condition = _information_at_solution(
+            remapped,
+            local,
+            huber_delta,
+            min_eigenvalue,
+            max_eigenvalue,
+            max_condition,
+        )
+        factor = PoseGraphFactor(
+            edge.a,
+            edge.b,
+            measurement,
+            information,
+            kind,
+            1.0,
+            len(edge.points_a),
+        )
+        return PairwiseCompressionResult(
+            factor, "compressed", None, 0.0, 0.0, condition
+        )
+    except Exception as error:
+        return PairwiseCompressionResult(
+            None, "rejected", str(error), None, None, None
+        )
+
+
 def compress_edge_to_pose_factor(
     edge,
     *,
@@ -77,26 +155,14 @@ def compress_edge_to_pose_factor(
             poses, [0, 1], [remapped],
             max_iters=max_iters, huber_delta=huber_delta,
         )
-        residual, covariance, jacobian = factor_system(
-            result.poses, [0, 1], [remapped]
+        information, condition = _information_at_solution(
+            remapped,
+            result.poses,
+            huber_delta,
+            min_eigenvalue,
+            max_eigenvalue,
+            max_condition,
         )
-        white_residual, white_jacobian = whiten(
-            residual, covariance, jacobian
-        )
-        weight = torch.clamp(
-            huber_delta / white_residual.norm(dim=-1).clamp_min(1e-15),
-            max=1.0,
-        ).sqrt()
-        A = (white_jacobian * weight[:, None, None]).reshape(-1, 6)
-        information = 0.5 * (A.T @ A + (A.T @ A).T)
-        eigenvalues, eigenvectors = torch.linalg.eigh(information)
-        raw_min = float(eigenvalues.min())
-        raw_max = float(eigenvalues.max())
-        if raw_min <= 0 or raw_max / raw_min > max_condition:
-            raise ValueError("pairwise ICP information is degenerate")
-        clamped = eigenvalues.clamp(min_eigenvalue, max_eigenvalue)
-        information = eigenvectors @ torch.diag(clamped) @ eigenvectors.T
-        condition = float(clamped.max() / clamped.min())
         factor = PoseGraphFactor(
             a=edge.a,
             b=edge.b,

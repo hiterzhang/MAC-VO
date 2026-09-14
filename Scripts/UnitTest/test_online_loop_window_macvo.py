@@ -57,6 +57,12 @@ class OnlineLoopWindowMACVOTests(unittest.TestCase):
         system.compress_edge = Mock(return_value=PairwiseCompressionResult(
             factor(0, 1), "compressed", None, 1.0, 0.5, 10.0
         ))
+        system.linearize_edge = Mock(return_value=PairwiseCompressionResult(
+            factor(0, 1), "compressed", None, 0.5, 0.5, 10.0
+        ))
+        system.graph = SimpleNamespace(frames=SimpleNamespace(
+            data={"pose": SimpleNamespace(tensor=pp.identity_SE3(2).tensor())}
+        ))
 
         first = system._compress_and_store(edge(), "adjacent")
         second = system._compress_and_store(edge(), "adjacent")
@@ -65,6 +71,8 @@ class OnlineLoopWindowMACVOTests(unittest.TestCase):
         self.assertFalse(second)
         self.assertEqual(system.pose_graph_version, 1)
         self.assertEqual(len(system.pose_factors), 1)
+        system.linearize_edge.assert_called_once()
+        system.compress_edge.assert_not_called()
 
     def test_runtime_folder_creates_bounded_online_stores(self):
         system = OnlineLoopWindowMACVO.__new__(OnlineLoopWindowMACVO)

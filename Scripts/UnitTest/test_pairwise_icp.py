@@ -8,6 +8,7 @@ import torch
 
 from Module.Optimization.PairwiseICP import (
     compress_edge_to_pose_factor,
+    linearize_edge_to_pose_factor,
     weighted_kabsch,
 )
 from Module.Optimization.PoseGraph import (
@@ -70,6 +71,23 @@ class PairwiseICPTests(unittest.TestCase):
         ))
         self.assertTrue(torch.equal(
             first.factor.information, second.factor.information
+        ))
+
+    def test_local_edge_linearization_uses_current_relative_pose(self):
+        truth, raw_edge = fixture()
+        poses = pp.identity_SE3(16, dtype=torch.float64).tensor()
+        poses[15] = truth.tensor()
+
+        result = linearize_edge_to_pose_factor(
+            raw_edge, poses, kind="adjacent"
+        )
+
+        self.assertEqual(result.status, "compressed")
+        self.assertTrue(torch.allclose(
+            result.factor.measurement, truth.tensor(), atol=1e-10
+        ))
+        self.assertTrue(torch.all(
+            torch.linalg.eigvalsh(result.factor.information) > 0
         ))
 
     def test_collinear_geometry_is_rejected(self):
