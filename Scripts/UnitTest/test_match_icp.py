@@ -8,7 +8,10 @@ from DataLoader import StereoData
 from Module.Frontend.Frontend import IFrontend
 from Module.Frontend.Matching import IMatcher
 from Module.Frontend.StereoDepth import IStereoDepth
-from Module.Optimization.MatchICP import build_match_edge
+from Module.Optimization.MatchICP import (
+    build_edge_from_correspondences,
+    build_match_edge,
+)
 from Odometry.WindowMACVO import WindowMACVO
 
 
@@ -75,6 +78,36 @@ def inputs():
 
 
 class MatchICPTests(unittest.TestCase):
+    def test_correspondence_builder_matches_existing_builder(self):
+        values = inputs()
+        uv_a = values["selector"].select_point()
+        uv_b = uv_a + values["frontend"].retrieve_pixels(
+            uv_a, values["match"].flow
+        ).T
+
+        legacy = build_match_edge(**values, a=0, b=5)
+        direct = build_edge_from_correspondences(
+            a=0,
+            b=5,
+            uv_a=uv_a,
+            uv_b=uv_b,
+            stereo_a=values["stereo_a"],
+            stereo_b=values["stereo_b"],
+            depth_a=values["depth_a"],
+            depth_b=values["depth_b"],
+            match=values["match"],
+            frontend=values["frontend"],
+            covariance_model=values["covariance_model"],
+            min_num_point=values["min_num_point"],
+            match_cov_default=values["match_cov_default"],
+            device=values["device"],
+        )
+
+        self.assertIsNotNone(legacy.edge)
+        self.assertIsNotNone(direct.edge)
+        self.assertTrue(torch.equal(legacy.edge.points_a, direct.edge.points_a))
+        self.assertTrue(torch.equal(legacy.edge.cov_b, direct.edge.cov_b))
+
     def test_match_builder_is_deterministic(self):
         first = build_match_edge(**inputs(), a=0, b=5)
         second = build_match_edge(**inputs(), a=0, b=5)
