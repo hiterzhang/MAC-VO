@@ -36,7 +36,9 @@ def build_parser():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--modes", nargs="+", choices=tuple(MODE_CONFIGS),
-        default=["window_skip", "window_orb_loop"],
+        default=[
+            "window_skip", "window_pose_graph", "window_orb_loop",
+        ],
     )
     parser.add_argument(
         "--result-root", type=Path,
@@ -56,6 +58,27 @@ def online_invariants(diagnostics):
         ) < 6 * 1024**3,
     }
     return {"passed": all(checks.values()), "checks": checks}
+
+
+def loop_switch_summary(diagnostics, threshold=0.01, long_gap=100):
+    results = diagnostics.get("pose_graph_results", [])
+    records = next((
+        result.get("loop_switches", [])
+        for result in reversed(results)
+        if "loop_switches" in result
+    ), [])
+    switches = [float(record["switch"]) for record in records]
+    return {
+        "max_loop_switch": max(switches, default=0.0),
+        "effective_loops_001": sum(
+            switch > threshold for switch in switches
+        ),
+        "effective_long_loops_001": sum(
+            float(record["switch"]) > threshold
+            and int(record["b"]) - int(record["a"]) > long_gap
+            for record in records
+        ),
+    }
 
 
 def write_rows(folder, rows):
@@ -168,6 +191,7 @@ def main(argv=None):
                 "pose_graph_writebacks": diagnostics["pose_graph_writebacks"],
                 "peak_vram_bytes": diagnostics["cuda_max_memory_reserved"],
                 "pose_factors": diagnostics["pose_factors"],
+                **loop_switch_summary(diagnostics),
             })
             (run_root / "online_invariants.json").write_text(
                 json.dumps(invariant, indent=2, allow_nan=False),

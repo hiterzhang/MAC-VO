@@ -364,6 +364,11 @@ def optimize_pose_graph(
             (anchor_pose @ pp.SE3(local)).tensor()
         )
         output[0] = original_anchor
+        loop_switches = [
+            {"a": factor.a, "b": factor.b, "switch": switch}
+            for factor, switch in zip(factors, switches)
+            if factor.kind == "loop"
+        ]
         return PoseGraphResult(output, switches, base | {
             "status": "refined",
             "initial_cost": initial_cost,
@@ -372,6 +377,7 @@ def optimize_pose_graph(
             "accepted_steps": accepted,
             "rejected_steps": rejected,
             "anchor_preserved": bool(torch.equal(output[0], original[0])),
+            "loop_switches": loop_switches,
             "seconds": time.perf_counter() - start,
         })
     except Exception as error:

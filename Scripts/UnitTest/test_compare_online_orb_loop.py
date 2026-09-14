@@ -5,6 +5,7 @@ import unittest
 
 from Scripts.Experiment.CompareOnlineORBLoop import (
     build_parser,
+    loop_switch_summary,
     online_invariants,
     write_rows,
 )
@@ -49,6 +50,26 @@ class CompareOnlineORBLoopTests(unittest.TestCase):
 
         self.assertEqual(args.sequence, "V203")
         self.assertIsNone(args.seq_to)
+        self.assertEqual(args.modes, [
+            "window_skip", "window_pose_graph", "window_orb_loop",
+        ])
+
+    def test_loop_switch_summary_counts_only_effective_factors(self):
+        diagnostics = {
+            "pose_graph_results": [{
+                "loop_switches": [
+                    {"a": 0, "b": 30, "switch": 0.5},
+                    {"a": 100, "b": 500, "switch": 0.02},
+                    {"a": 200, "b": 900, "switch": 1e-5},
+                ],
+            }],
+        }
+
+        self.assertEqual(loop_switch_summary(diagnostics), {
+            "max_loop_switch": 0.5,
+            "effective_loops_001": 2,
+            "effective_long_loops_001": 1,
+        })
 
 
 if __name__ == "__main__":

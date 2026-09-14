@@ -449,6 +449,41 @@ Pass A执行373次固定batch=3，生成约1.08GB深度缓存，耗时323.27秒�
 
 与同一次运行的全局优化前轨迹相比，动态proximity ATE下降约0.252%，RTE、ROE和RPE分别明显低于优化前结果。这说明动态共视在完整V203上能够带来可复现但幅度较小的整体改善；它尚未超过历史旧提交约0.5699米的完整V203 ATE，因此当前证据仍不足以替代`window-icp-v0.2`作为默认运行版本。
 
+### 在线ORB-BoW回环与后台位姿图
+
+在线版本`MACVO_Fast_WindowICP_ORBLoop.yaml`保留原WindowICP的相邻边和`t-2` skip边，并增加异步ORB-BoW候选、共享FlowFormerCov固定batch=3双向验证、串行GPU访问和单线程后台稀疏位姿图。回环验证继续复用同一模型实例和同一CUDA Graph，不允许跟踪与回环GPU推理并发。关键帧图像使用无损PNG落盘，GPU侧只保留有界待验证目标。
+
+完整V203运行命令：
+
+~~~bash
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. \
+  .venv/bin/python Scripts/Experiment/CompareOnlineORBLoop.py \
+  --sequence V203 --seq-from 0 --seed 0 \
+  --modes window_orb_loop \
+  --result-root /home/zzh/MACVO/Results/OnlineORBLoop_V203_full
+~~~
+
+提交`ca88f45`完成全部1865帧，结果目录为`Results/OnlineORBLoop_V203_full/20260914_232539_309810`，版本化汇总见[online_orb_loop_v203_full.csv](validation/online_orb_loop_v203_full.csv)。
+
+| 指标 | 在线ORB版本 |
+|---|---:|
+| ATE RMSE | 0.465289 m |
+| RTE RMSE | 0.006868 m/frame |
+| ROE RMSE | 0.160229°/frame |
+| RPE RMSE | 0.007925 |
+| 在线平均Odom耗时 | 1127.0 ms/frame |
+| 中位Odom耗时 | 1045.6 ms/frame |
+| P95 Odom耗时 | 1911.4 ms/frame |
+| 峰值CUDA保留显存 | 4.049 GiB |
+
+运行只创建1个前端模型和1个batch=3 CUDA Graph，最大并发GPU调用为1。正常跟踪调用1865次，额外回环前端调用82次，回环推理累计73.49秒。ORB初筛/几何验证写入51条loop因子，其中29条跨度大于100帧、22条跨度大于300帧，最大跨度1455帧。后台提交52次、完成49次、合并3次，写回48次；最终3778条因子包括1864条相邻边、1863条skip边和51条loop边。最终1865位姿求解耗时17.90秒。关键帧PNG约161MiB，压缩位姿因子约1.8MiB。
+
+但“通过几何初筛”不等于“对优化有效”。按最终信息矩阵计算，51条loop因子的switch中位数仅`7.35e-6`，最大值0.02725；switch大于0.01的3条边都是`0→30/45/50`近程冗余边，没有一条跨度大于100帧的有效loop。使用同一次运行的内部相机位姿和序列化因子，移除全部51条loop后重新求解，ATE为0.465328米；保留loop为0.465289米，只改善0.0000389米、约0.0084%。因此当前长程ORB回环没有带来实质ATE改善。
+
+相对完整V203同源旧实验的优化前WindowICP轨迹0.578985米，在线版本ATE下降约19.64%。证据表明该收益几乎全部来自相邻/skip压缩因子的后台全局位姿图及48次周期写回，而不是长程回环。代价是平均在线耗时相对旧完整运行约增加16.34%，末段大图后台求解使P95达到1.91秒。当前版本是已验证完整V203中ATE最好的本分支候选，但不能宣称ORB回环策略已成功。
+
+下一步应把后台位姿图改为独立固定周期触发，使“仅短程位姿图”与“短程位姿图+回环”拥有相同写回时序；同时对ORB候选增加更严格的独立ICP质量/位姿一致性分层，并优先分析FlowFormer在真正长跨度重访上的错误对应。对比脚本现默认运行`window_skip`、`window_pose_graph`和`window_orb_loop`三组，并在新运行中直接输出最终最大switch、switch>0.01的有效loop数和有效长程loop数。
+
 ## 每次运行的追溯信息
 
 - config.yaml：本次Odometry配置。
@@ -473,6 +508,5 @@ git diff --stat baseline/fast-icp-euroc-20260912..window-icp-v0.1
 
 ## 尚未实现
 
-没有边缘化先验、回环检测、共享地图点BA或BAE后端；没有估计重复图像观测带来的跨因子相关性。
-v0.3只在序列终止时利用已有短程因子更新窗口外位姿，没有新增长程观测；最早位姿固定不等于全局漂移已消除。
+没有边缘化先验、共享地图点BA或BAE后端；没有估计重复图像观测带来的跨因子相关性。在线ORB-BoW回环已经能够提出并验证任意跨度候选，但完整V203中所有真正长程边都被switch抑制，尚未形成有效的低频漂移约束。最早位姿固定不等于全局漂移已消除。
 完整EuRoC评测仍需运行上面的批量命令。

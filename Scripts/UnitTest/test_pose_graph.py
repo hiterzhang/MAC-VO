@@ -85,6 +85,22 @@ class PoseGraphTests(unittest.TestCase):
         self.assertLess(result.switches[-1], 0.25)
         self.assertTrue(torch.allclose(result.poses, truth, atol=1e-4))
 
+    def test_diagnostics_report_final_loop_switches_with_endpoints(self):
+        truth = truth_poses(4)
+        factors = [
+            factor(truth, index - 1, index)
+            for index in range(1, len(truth))
+        ]
+        factors.append(factor(truth, 0, 3, kind="loop"))
+
+        result = optimize_pose_graph(truth, factors, max_iters=2)
+
+        self.assertEqual(result.diagnostics["loop_switches"], [{
+            "a": 0,
+            "b": 3,
+            "switch": result.switches[-1],
+        }])
+
     def test_skip_information_cap_scales_information(self):
         truth = truth_poses(3)
         skip = factor(truth, 0, 2, kind="skip2")
