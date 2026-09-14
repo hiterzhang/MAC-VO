@@ -8,6 +8,7 @@ from DataLoader import StereoData
 from Module.Frontend.Frontend import (
     CUDAGraph_FlowFormerCovFrontend,
     IFrontend,
+    build_bidirectional_inputs,
     build_window_inputs,
 )
 
@@ -29,6 +30,44 @@ def stereo(left: float, right: float) -> StereoData:
 
 
 class FusedWindowFrontendTests(unittest.TestCase):
+    def test_builds_target_stereo_forward_and_backward_slots(self):
+        input_a, input_b = build_bidirectional_inputs(
+            stereo(2, 20), stereo(0, 30)
+        )
+
+        self.assertEqual(input_a[:, 0, 0, 0].tolist(), [0.0, 2.0, 0.0])
+        self.assertEqual(input_b[:, 0, 0, 0].tolist(), [30.0, 0.0, 2.0])
+
+    def test_bidirectional_inputs_reject_mismatched_shape(self):
+        source = stereo(2, 20)
+        target = stereo(0, 30)
+        source.imageL = source.imageL[..., :1]
+
+        with self.assertRaisesRegex(ValueError, "shape mismatch"):
+            build_bidirectional_inputs(source, target)
+
+    def test_cuda_frontend_routes_bidirectional_slots(self):
+        frontend = CUDAGraph_FlowFormerCovFrontend.__new__(
+            CUDAGraph_FlowFormerCovFrontend
+        )
+        frontend.config = SimpleNamespace(
+            device="cpu", enforce_positive_disparity=False
+        )
+        flow = torch.zeros(3, 2, 2, 2)
+        covariance = torch.ones(3, 2, 2, 2)
+        flow[0, 0] = 2
+        flow[1] = 11
+        flow[2] = 22
+        frontend.cuda_graph_estimate = lambda *_: (flow, covariance)
+
+        depth, forward, backward = frontend.estimate_bidirectional(
+            stereo(2, 20), stereo(0, 30)
+        )
+
+        self.assertTrue(torch.allclose(depth.depth, torch.ones_like(depth.depth)))
+        self.assertTrue(torch.equal(forward.flow, flow[1:2]))
+        self.assertTrue(torch.equal(backward.flow, flow[2:3]))
+
     def test_rejects_non_single_frame_inputs_before_graph_capture(self):
         prev1 = stereo(1, 10)
         current = stereo(0, 30)
