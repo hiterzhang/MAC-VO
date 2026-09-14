@@ -30,6 +30,7 @@ class CompareOnlineORBLoopTests(unittest.TestCase):
     def test_write_rows_preserves_mode_order(self):
         rows = [
             {"mode": "window_skip", "RMSE_ATE": 0.2},
+            {"mode": "window_pose_graph", "RMSE_ATE": 0.15},
             {"mode": "window_orb_loop", "RMSE_ATE": 0.1},
         ]
         with tempfile.TemporaryDirectory() as directory:
@@ -38,7 +39,7 @@ class CompareOnlineORBLoopTests(unittest.TestCase):
 
         self.assertEqual(
             [row["mode"] for row in saved],
-            ["window_skip", "window_orb_loop"],
+            ["window_skip", "window_pose_graph", "window_orb_loop"],
         )
 
     def test_parser_accepts_complete_sequence(self):

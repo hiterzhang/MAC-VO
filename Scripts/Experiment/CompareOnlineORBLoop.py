@@ -23,6 +23,7 @@ from Utility.Config import load_config
 
 MODE_CONFIGS = {
     "window_skip": ROOT / "Config/Experiment/MACVO/MACVO_Fast_WindowICP.yaml",
+    "window_pose_graph": ROOT / "Config/Experiment/MACVO/MACVO_Fast_WindowICP_ORBLoop.yaml",
     "window_orb_loop": ROOT / "Config/Experiment/MACVO/MACVO_Fast_WindowICP_ORBLoop.yaml",
 }
 
@@ -92,6 +93,9 @@ def main(argv=None):
         mode_root.mkdir()
         _, config = load_config(MODE_CONFIGS[mode])
         config = copy.deepcopy(config)
+        if mode == "window_pose_graph":
+            config["Odometry"]["args"]["online_loop"]["enabled"] = False
+            config["Odometry"]["name"] = "MACVO-Fast-WindowICP5-PoseGraph"
         config_path = mode_root / "input.yaml"
         config_path.write_text(
             yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
@@ -148,7 +152,7 @@ def main(argv=None):
         row["unrefined_windows"] = sum(
             item["status"] != "refined" for item in window["windows"]
         )
-        if mode == "window_orb_loop":
+        if mode in {"window_pose_graph", "window_orb_loop"}:
             diagnostics = json.loads(
                 (space / "online_loop_diagnostics.json").read_text()
             )

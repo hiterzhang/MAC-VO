@@ -133,14 +133,17 @@ class OnlineLoopWindowMACVO(WindowMACVO):
             self.max_pending_targets
         )
         if self.loop_provider is None:
-            self.loop_provider = ORBLoopCandidateProvider(
-                executable=Path(self.orb_sidecar),
-                vocabulary=Path(self.orb_vocabulary),
-                min_temporal_gap=self.loop_min_temporal_gap,
-                top_k=self.bow_top_k,
-                queue_size=self.max_candidate_queue,
-            )
-        if not self.loop_provider.enabled:
+            if self.loop_enabled:
+                self.loop_provider = ORBLoopCandidateProvider(
+                    executable=Path(self.orb_sidecar),
+                    vocabulary=Path(self.orb_vocabulary),
+                    min_temporal_gap=self.loop_min_temporal_gap,
+                    top_k=self.bow_top_k,
+                    queue_size=self.max_candidate_queue,
+                )
+            else:
+                self.loop_provider = None
+        if self.loop_provider is not None and not self.loop_provider.enabled:
             self.loop_enabled = False
 
     def _compress_and_store(self, edge, kind, confidence=1.0):
@@ -228,8 +231,15 @@ class OnlineLoopWindowMACVO(WindowMACVO):
                 maximum=self.max_candidates_per_target,
             )
             self.candidate_filter_counts.update(counts)
+            if not selected:
+                self.pending_targets.pop(response.target)
             for candidate in selected:
                 pair = (candidate.source, response.target)
+                if len(self.loop_candidates) == self.loop_candidates.maxlen:
+                    dropped_target, dropped = self.loop_candidates.popleft()
+                    dropped_pair = (dropped.source, dropped_target)
+                    self.pending_loop_pairs.discard(dropped_pair)
+                    self.pending_targets.pop(dropped_target)
                 self.pending_loop_pairs.add(pair)
                 self.loop_candidates.append((response.target, candidate))
 

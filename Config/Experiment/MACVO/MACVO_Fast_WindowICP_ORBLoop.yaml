@@ -27,7 +27,7 @@ Odometry:
       candidate_nms_frames: 10
       max_candidate_queue: 8
       max_pending_targets: 8
-      min_bow_score: 0.02
+      min_bow_score: 0.005
       min_frames_between_loop_matches: 25
       orb_sidecar: ./build/orb_bow/macvo_orb_bow
       vocabulary: ./cache/ORBvoc.txt

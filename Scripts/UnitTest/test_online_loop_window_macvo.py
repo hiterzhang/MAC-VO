@@ -8,6 +8,10 @@ import pypose as pp
 import torch
 
 from Module.Frontend.SerializedFrontend import SerializedFrontend
+from Module.LoopClosure.ORBBoW import (
+    ORBLoopCandidate,
+    ORBLoopCandidateBatch,
+)
 from Module.Optimization.PairwiseICP import PairwiseCompressionResult
 from Module.Optimization.PoseGraph import PoseGraphFactor
 from Module.Optimization.WindowICP import Edge
@@ -91,6 +95,27 @@ class OnlineLoopWindowMACVOTests(unittest.TestCase):
             self.assertTrue(Path(directory, "online_loop_keyframes").is_dir())
             self.assertEqual(system.pending_targets.capacity, 3)
             self.assertFalse(system.loop_provider.enabled)
+
+    def test_orb_response_without_eligible_candidate_releases_target(self):
+        system = OnlineLoopWindowMACVO.__new__(OnlineLoopWindowMACVO)
+        system.loop_provider = SimpleNamespace(poll=lambda: [
+            ORBLoopCandidateBatch(
+                1, 40, (ORBLoopCandidate(0, 0.001, 0),)
+            )
+        ])
+        system.min_bow_score = 0.005
+        system.existing_loop_pairs = set()
+        system.pending_loop_pairs = set()
+        system.rejected_loop_pairs = set()
+        system.candidate_nms_frames = 10
+        system.max_candidates_per_target = 1
+        system.candidate_filter_counts = __import__("collections").Counter()
+        system.loop_candidates = __import__("collections").deque(maxlen=8)
+        system.pending_targets = SimpleNamespace(pop=Mock())
+
+        system._poll_orb_candidates()
+
+        system.pending_targets.pop.assert_called_once_with(40)
 
 
 if __name__ == "__main__":
