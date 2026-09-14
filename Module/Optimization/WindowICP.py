@@ -17,8 +17,15 @@ class Edge:
     cov_b: torch.Tensor
 
     def __post_init__(self):
-        if self.b - self.a not in (1, 2):
-            raise ValueError("Only adjacent and two-step edges are supported")
+        if (
+            not isinstance(self.a, int)
+            or not isinstance(self.b, int)
+            or self.a < 0
+            or self.b <= self.a
+        ):
+            raise ValueError(
+                "Edge endpoints must be non-negative and strictly forward"
+            )
         n = len(self.points_a)
         for name, shape in (
             ("points_a", (n, 3)), ("points_b", (n, 3)),
@@ -40,6 +47,14 @@ def edge_tensor_bytes(edge):
         value.numel() * value.element_size()
         for value in (edge.points_a, edge.points_b, edge.cov_a, edge.cov_b)
     )
+
+
+def edge_gap_counts(edges):
+    counts = {}
+    for edge in edges:
+        key = str(edge.b - edge.a)
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items(), key=lambda item: int(item[0])))
 
 
 class EdgeWindow:
@@ -198,6 +213,7 @@ def optimize_window(poses, frame_ids, edges, max_iters=10, huber_delta=3.0, damp
         "frames": frame_ids, "anchor": frame_ids[0], "active_poses": len(frame_ids),
         "edges": len(edges), "adjacent_edges": sum(e.b-e.a == 1 for e in edges),
         "skip_edges": sum(e.b-e.a == 2 for e in edges),
+        "edge_gaps": edge_gap_counts(edges),
         "observations": sum(len(e.points_a) for e in edges),
         "initial_cost": initial_cost, "final_cost": cost, "iterations": iterations,
         "accepted_steps": accepted, "rejected_steps": rejected,

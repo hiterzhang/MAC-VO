@@ -36,6 +36,29 @@ def fixture():
 
 
 class WindowICPTests(unittest.TestCase):
+    def test_edge_accepts_positive_long_gap(self):
+        _, _, edges = fixture()
+        base = edges[0]
+
+        edge = Edge(
+            0, 10,
+            base.points_a, base.points_b,
+            base.cov_a, base.cov_b,
+        )
+
+        self.assertEqual((edge.a, edge.b), (0, 10))
+
+    def test_edge_rejects_non_forward_endpoint(self):
+        _, _, edges = fixture()
+        base = edges[0]
+
+        with self.assertRaisesRegex(ValueError, "strictly forward"):
+            Edge(
+                4, 4,
+                base.points_a, base.points_b,
+                base.cov_a, base.cov_b,
+            )
+
     def test_recovers_five_poses_and_keeps_anchor(self):
         truth, initial, edges = fixture()
         result = optimize_window(initial.tensor(), list(range(5)), edges, max_iters=20)

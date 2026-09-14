@@ -43,6 +43,25 @@ def global_fixture(count=12):
 
 
 class GlobalPoseICPTests(unittest.TestCase):
+    def test_diagnostics_count_long_edge_gaps(self):
+        truth, initial, edges = global_fixture()
+        covariance = torch.eye(3, dtype=torch.float64)[None] * 0.001
+        world = torch.tensor([[4.0, 0.2, -0.1]], dtype=torch.float64)
+        edges.append(
+            Edge(
+                0,
+                10,
+                truth[0].Inv().Act(world),
+                truth[10].Inv().Act(world),
+                covariance,
+                covariance,
+            )
+        )
+
+        result = optimize_global_pose_graph(initial, edges, max_iters=15)
+
+        self.assertEqual(result.diagnostics["edge_gaps"]["10"], 1)
+
     def test_recovers_more_than_five_poses_and_preserves_anchor(self):
         truth, initial, edges = global_fixture()
 

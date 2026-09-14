@@ -10,7 +10,13 @@ from scipy.sparse import coo_matrix, diags
 from scipy.sparse.linalg import MatrixRankWarning, spsolve
 import torch
 
-from Module.Optimization.WindowICP import Edge, huber_cost, normalized_pose, skew
+from Module.Optimization.WindowICP import (
+    Edge,
+    edge_gap_counts,
+    huber_cost,
+    normalized_pose,
+    skew,
+)
 from Utility.Timer import Timer
 
 
@@ -146,6 +152,7 @@ def optimize_global_pose_graph(
     base_diagnostics = {
         "poses": len(original),
         "edges": len(edges),
+        "edge_gaps": edge_gap_counts(edges),
         "observations": sum(len(edge.points_a) for edge in edges),
     }
     try:
