@@ -181,7 +181,7 @@ class WindowMACVO(MACVO):
         return [edges[key] for key in sorted(edges)]
 
     def _capture_factor_snapshot(self, poses):
-        if not self.global_refine:
+        if not getattr(self, "global_refine", False):
             return
         graph = self.graph.frames.data
         edges = tuple(self._global_edges())
