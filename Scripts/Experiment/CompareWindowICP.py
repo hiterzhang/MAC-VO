@@ -19,6 +19,46 @@ from Utility.Config import load_config
 from Evaluation.EvalSeq import EvaluateSequences
 
 
+MODE_CONFIGS = {
+    "twoframe": ROOT / "Config/Experiment/MACVO/MACVO_Fast_ICP_local.yaml",
+    "window_adjacent": ROOT / "Config/Experiment/MACVO/MACVO_Fast_WindowICP.yaml",
+    "window_skip": ROOT / "Config/Experiment/MACVO/MACVO_Fast_WindowICP.yaml",
+    "window_global": ROOT / "Config/Experiment/MACVO/MACVO_Fast_WindowICP_Global.yaml",
+}
+
+
+def append_window_diagnostics(row, space, mode):
+    if mode == "twoframe":
+        return row
+    payload = json.loads((space / "window_diagnostics.json").read_text())
+    diagnostics = payload["windows"]
+    if any(
+        record["cached_frames"] > 5 or record["cached_edges"] > 7
+        for record in diagnostics
+    ):
+        raise RuntimeError("Window cache exceeded its bound")
+    row["unrefined_windows"] = sum(
+        record["status"] != "refined" for record in diagnostics
+    )
+    row["refine_mean_ms"] = float(
+        np.mean([record.get("seconds", 0) * 1000 for record in diagnostics])
+    )
+    row["skip_mean_ms"] = float(
+        np.mean([record["skip_seconds"] * 1000 for record in diagnostics])
+    )
+    if mode == "window_global":
+        global_record = payload["global_refinement"]
+        row.update({
+            "inactive_edges": payload["inactive_edges"],
+            "retained_tensor_bytes": payload["retained_tensor_bytes"],
+            "global_status": global_record["status"],
+            "global_seconds": global_record.get("seconds"),
+            "global_initial_cost": global_record.get("initial_cost"),
+            "global_final_cost": global_record.get("final_cost"),
+        })
+    return row
+
+
 def run_and_tee(command, cwd, env, log_path, terminal=None):
     """Stream a child's raw stdout to the terminal and its per-run log."""
     terminal = sys.stdout.buffer if terminal is None else terminal
@@ -52,7 +92,7 @@ def main():
     parser.add_argument("--seq_from", type=int, default=0)
     parser.add_argument("--seq_to", type=int, default=None)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--modes", nargs="+", choices=["twoframe", "window_adjacent", "window_skip"],
+    parser.add_argument("--modes", nargs="+", choices=list(MODE_CONFIGS),
                         default=["twoframe", "window_adjacent", "window_skip"])
     parser.add_argument("--resultRoot", type=Path, default=ROOT / "Results/WindowICP_comparison")
     args = parser.parse_args()
@@ -61,11 +101,6 @@ def main():
     run_dir = args.resultRoot.resolve() / (datetime.now().strftime("%Y%m%d_%H%M%S")+"_"+uuid.uuid4().hex[:6])
     run_dir.mkdir(parents=True, exist_ok=False)
     print(f"Comparison results: {run_dir}", flush=True)
-    configs = {
-        "twoframe": ROOT / "Config/Experiment/MACVO/MACVO_Fast_ICP_local.yaml",
-        "window_adjacent": ROOT / "Config/Experiment/MACVO/MACVO_Fast_WindowICP.yaml",
-        "window_skip": ROOT / "Config/Experiment/MACVO/MACVO_Fast_WindowICP.yaml",
-    }
     rows = []
     for seq in args.sequences:
         data_path = ROOT / f"Config/Sequence/EuRoC_{seq}_local.yaml"
@@ -76,7 +111,7 @@ def main():
         for mode in args.modes:
             folder = run_dir / seq / mode
             folder.mkdir(parents=True, exist_ok=False)
-            _, config = load_config(configs[mode])
+            _, config = load_config(MODE_CONFIGS[mode])
             config = copy.deepcopy(config)
             if mode == "window_adjacent":
                 config["Odometry"]["args"]["skip_matching"] = False
@@ -116,13 +151,7 @@ def main():
                    "space": str(space), "git_commit": provenance["git_commit"],
                    "seed": args.seed, "runtime_mean_ms": float(np.mean(timer)),
                    **dict(zip(header[1:], metrics[1:]))}
-            if mode != "twoframe":
-                diagnostics = json.loads((space/"window_diagnostics.json").read_text())["windows"]
-                if any(r["cached_frames"] > 5 or r["cached_edges"] > 7 for r in diagnostics):
-                    raise RuntimeError("Window cache exceeded its bound")
-                row["unrefined_windows"] = sum(r["status"] != "refined" for r in diagnostics)
-                row["refine_mean_ms"] = float(np.mean([r.get("seconds", 0)*1000 for r in diagnostics]))
-                row["skip_mean_ms"] = float(np.mean([r["skip_seconds"]*1000 for r in diagnostics]))
+            append_window_diagnostics(row, space, mode)
             rows.append(row)
             (run_dir/"metrics.json").write_text(json.dumps(rows, indent=2, allow_nan=False))
             columns = list(dict.fromkeys(key for row in rows for key in row))
