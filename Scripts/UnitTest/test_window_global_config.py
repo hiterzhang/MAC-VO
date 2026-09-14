@@ -1,10 +1,12 @@
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import torch
 
 from Module.Optimization.WindowICP import Edge, EdgeWindow
 from Odometry.WindowMACVO import WindowMACVO
+from Odometry.MACVO import MACVO
 from Utility.Config import load_config
 
 
@@ -15,6 +17,20 @@ def make_edge(a, b):
 
 
 class WindowGlobalConfigTests(unittest.TestCase):
+    def test_from_config_rejects_invalid_global_type_before_construction(self):
+        config, _ = load_config(
+            Path("Config/Experiment/MACVO/MACVO_Fast_WindowICP_Global.yaml")
+        )
+        config.Odometry.args.global_refine = "yes"
+
+        with patch.object(
+            MACVO,
+            "from_config",
+            side_effect=AssertionError("construction should not start"),
+        ):
+            with self.assertRaisesRegex(ValueError, "Config does not match"):
+                WindowMACVO.from_config(config)
+
     def test_v03_config_enables_global_refinement(self):
         config, _ = load_config(
             Path("Config/Experiment/MACVO/MACVO_Fast_WindowICP_Global.yaml")

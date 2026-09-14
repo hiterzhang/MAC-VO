@@ -66,6 +66,7 @@ class WindowMACVO(MACVO):
     @classmethod
     def from_config(cls, cfg):
         c = cfg.Odometry
+        cls.is_valid_config(c)
         if c.args.mapping or c.keyframe.type != "AllKeyframe":
             raise ValueError("Window v1 requires mapping=false and AllKeyframe")
         if c.optimizer.type != "TwoFrame_PGO" or c.optimizer.args.graph_type != "icp":
