@@ -16,6 +16,7 @@ from Module.Optimization.FactorArchive import (
     sensor_to_body_trajectory,
 )
 from Module.Optimization.GlobalPoseICP import optimize_global_pose_graph
+from Module.Optimization.MatchICP import build_match_edge
 from Module.Optimization.WindowICP import (
     Edge,
     EdgeWindow,
@@ -23,7 +24,7 @@ from Module.Optimization.WindowICP import (
     optimize_window,
     normalized_pose,
 )
-from Utility.Point import pixel2point_NED, filterPointsInRange
+from Utility.Point import pixel2point_NED
 from Utility.PrettyPrint import Logger
 
 
@@ -204,29 +205,23 @@ class WindowMACVO(MACVO):
     def _skip_edge_from_match(self, a, b, match):
         frame0, depth0 = self.frame_cache[a]
         frame1, depth1 = self.frame_cache[b]
-        # Extra random keypoint sampling must not perturb subsequent adjacent sampling.
-        with torch.random.fork_rng(devices=[]):
-            torch.default_generator.manual_seed(1000003 + a * 1009 + b)
-            uv0 = self.KeypointSelector.select_point(
-                frame0.stereo, self.num_point, depth0, depth1, match)
-        uv1 = uv0 + self.Frontend.retrieve_pixels(uv0, match.flow).T
-        valid = torch.isfinite(uv1).all(-1) & filterPointsInRange(
-            uv1, (self.edge_width, frame1.stereo.width-self.edge_width),
-            (self.edge_width, frame1.stereo.height-self.edge_width))
-        uv0, uv1 = uv0[valid], uv1[valid]
-        if len(uv0) < self.min_num_point:
-            return None
-        d0 = self.Frontend.retrieve_pixels(uv0, depth0.depth).squeeze(0)
-        d1 = self.Frontend.retrieve_pixels(uv1, depth1.depth).squeeze(0)
-        v0 = self.Frontend.retrieve_pixels(uv0, depth0.cov).squeeze(0)
-        v1 = self.Frontend.retrieve_pixels(uv1, depth1.cov).squeeze(0)
-        uvvar0 = torch.full((len(uv0), 3), self.match_cov_default, device=self.device)
-        uvvar0[:, 2] = 0
-        uvvar1 = self.Frontend.retrieve_pixels(uv0, match.cov).T.clone()
-        cov0 = self.ObsCovModel.estimate(frame0.stereo, uv0, depth0, v0, uvvar0)
-        cov1 = self.ObsCovModel.estimate(frame1.stereo, uv1, depth1, v1, uvvar1)
-        return self._edge(a, b, uv0, uv1, d0, d1, cov0, cov1,
-                          frame0.stereo.frame_K, frame1.stereo.frame_K)
+        return build_match_edge(
+            a=a,
+            b=b,
+            stereo_a=frame0.stereo,
+            stereo_b=frame1.stereo,
+            depth_a=depth0,
+            depth_b=depth1,
+            match=match,
+            frontend=self.Frontend,
+            selector=self.KeypointSelector,
+            covariance_model=self.ObsCovModel,
+            num_point=self.num_point,
+            min_num_point=self.min_num_point,
+            edge_width=self.edge_width,
+            match_cov_default=self.match_cov_default,
+            device=self.device,
+        ).edge
 
     def run_pair(self, frame0, frame1):
         before_match = len(self.graph.match)
