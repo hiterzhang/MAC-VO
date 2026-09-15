@@ -4,7 +4,7 @@
 
 **Goal:** Add a complete no-skip online WindowICP variant and measure its short-sequence and full-V203 accuracy, runtime, memory, and backend behavior against the existing online ORB result.
 
-**Architecture:** Preserve `OnlineLoopWindowMACVO` and select the existing `skip_matching: false` path through a dedicated experiment configuration. Register a comparison mode without changing current defaults, then run the same V203 seed and preprocessing while verifying that no `skip2` factors are produced.
+**Architecture:** Preserve `OnlineLoopWindowMACVO` and select `skip_matching: false` through a dedicated experiment configuration. Route no-skip tracking through `estimate_window(None, ...)` so the shared frontend retains fixed batch=3 for later bidirectional loop calls, while discarding the padded third-slot output and producing no `skip2` factors.
 
 **Tech Stack:** Python, PyTorch, PyPose, pytest, YAML experiment configs, existing MACVO comparison/evaluation tools.
 
@@ -16,6 +16,8 @@
 - Create: `Config/Experiment/MACVO/MACVO_Fast_WindowICP_ORBLoop_NoSkip.yaml`
 - Modify: `Scripts/Experiment/CompareOnlineORBLoop.py`
 - Modify: `Scripts/UnitTest/test_compare_online_orb_loop.py`
+- Modify: `Odometry/WindowMACVO.py`
+- Modify: `Scripts/UnitTest/test_window_frontend_routing.py`
 
 - [ ] **Step 1: Write the failing configuration test**
 
@@ -53,6 +55,17 @@ Register:
 ```
 
 Do not add this ablation mode to the normal three-mode default.
+
+Route `skip_matching: false` through:
+
+```python
+depth, adjacent, _ = self.Frontend.estimate_window(
+    None, frame0.stereo, frame1.stereo
+)
+return depth, adjacent, None
+```
+
+For the CUDA Graph frontend this captures and reuses batch=3; generic frontends retain their pair-estimation fallback.
 
 - [ ] **Step 4: Run the targeted tests and verify GREEN**
 

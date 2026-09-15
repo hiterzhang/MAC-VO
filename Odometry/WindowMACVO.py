@@ -159,8 +159,8 @@ class WindowMACVO(MACVO):
 
     def _estimate_window_inputs(self, frame0, frame1):
         if not self.skip_matching:
-            depth1, adjacent = self.Frontend.estimate_pair(
-                frame0.stereo, frame1.stereo
+            depth1, adjacent, _ = self.Frontend.estimate_window(
+                None, frame0.stereo, frame1.stereo
             )
             return depth1, adjacent, None
 

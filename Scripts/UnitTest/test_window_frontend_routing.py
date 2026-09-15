@@ -39,7 +39,7 @@ class WindowFrontendRoutingTests(unittest.TestCase):
         self.assertEqual(result, ("depth", "adjacent", "skip"))
         system.Frontend.estimate_window.assert_called_once_with(None, "t1", "t")
 
-    def test_adjacent_mode_keeps_batch2_path(self):
+    def test_adjacent_mode_uses_padded_window_for_fixed_batch3(self):
         system = self.make_system(False)
 
         result = system._estimate_window_inputs(
@@ -47,8 +47,8 @@ class WindowFrontendRoutingTests(unittest.TestCase):
         )
 
         self.assertEqual(result, ("depth", "adjacent", None))
-        system.Frontend.estimate_pair.assert_called_once_with("t1", "t")
-        system.Frontend.estimate_window.assert_not_called()
+        system.Frontend.estimate_window.assert_called_once_with(None, "t1", "t")
+        system.Frontend.estimate_pair.assert_not_called()
 
 
 if __name__ == "__main__":

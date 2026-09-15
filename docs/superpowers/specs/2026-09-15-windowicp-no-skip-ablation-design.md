@@ -8,7 +8,8 @@ Measure the accuracy, runtime, memory, and backend behavior change caused by com
 
 The no-skip variant will set `skip_matching: false`. Consequently:
 
-- the tracking frontend will estimate only current stereo depth and `t-1 -> t` matching;
+- the tracking frontend will retain fixed batch=3, using a duplicated adjacent input in the third slot and discarding that output;
+- only current stereo depth and `t-1 -> t` matching will become observations;
 - the five-frame WindowICP will contain only adjacent edges;
 - no `skip2` pose factors will be compressed or stored;
 - the persistent pose graph will contain adjacent and validated loop factors only.
@@ -47,7 +48,7 @@ The comparison measures the total contribution of `t-2 -> t`, including both loc
 
 Expected outcomes:
 
-- lower runtime is expected because one temporal flow slot and all skip edge construction are removed;
+- GPU inference runtime and memory should remain comparable because fixed batch=3 is preserved; only skip edge construction, local residuals, factor compression, and global sparse blocks are removed;
 - accuracy may degrade because adjacent-only chains have weaker rotational and translational redundancy;
 - any accuracy improvement would indicate that current skip measurements or their information scaling are harmful.
 
