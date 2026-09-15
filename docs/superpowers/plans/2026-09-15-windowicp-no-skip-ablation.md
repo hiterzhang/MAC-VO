@@ -165,7 +165,7 @@ git diff --check
 
 Expected: all tests pass and no whitespace errors.
 
-- [ ] **Step 3: Commit the evaluation**
+- [x] **Step 3: Commit the evaluation**
 
 ```bash
 git add docs/WindowICP.md \
@@ -173,6 +173,6 @@ git add docs/WindowICP.md \
 git commit -m "eval: compare no-skip online WindowICP on V203"
 ```
 
-- [ ] **Step 4: Confirm isolation**
+- [x] **Step 4: Confirm isolation**
 
 Require a clean `experiment/window-icp-global-v03` worktree. Do not merge or push automatically.
