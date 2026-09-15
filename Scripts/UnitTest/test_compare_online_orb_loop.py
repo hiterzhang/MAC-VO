@@ -4,11 +4,13 @@ import tempfile
 import unittest
 
 from Scripts.Experiment.CompareOnlineORBLoop import (
+    MODE_CONFIGS,
     build_parser,
     loop_switch_summary,
     online_invariants,
     write_rows,
 )
+from Utility.Config import load_config
 
 
 class CompareOnlineORBLoopTests(unittest.TestCase):
@@ -70,6 +72,15 @@ class CompareOnlineORBLoopTests(unittest.TestCase):
             "effective_loops_001": 2,
             "effective_long_loops_001": 1,
         })
+
+    def test_no_skip_mode_disables_skip_and_keeps_online_loop(self):
+        _, config = load_config(MODE_CONFIGS["window_orb_loop_no_skip"])
+
+        self.assertEqual(config["Odometry"]["type"], "OnlineLoopWindowMACVO")
+        self.assertFalse(config["Odometry"]["args"]["skip_matching"])
+        self.assertTrue(
+            config["Odometry"]["args"]["online_loop"]["enabled"]
+        )
 
 
 if __name__ == "__main__":

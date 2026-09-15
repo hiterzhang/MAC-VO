@@ -25,6 +25,10 @@ MODE_CONFIGS = {
     "window_skip": ROOT / "Config/Experiment/MACVO/MACVO_Fast_WindowICP.yaml",
     "window_pose_graph": ROOT / "Config/Experiment/MACVO/MACVO_Fast_WindowICP_ORBLoop.yaml",
     "window_orb_loop": ROOT / "Config/Experiment/MACVO/MACVO_Fast_WindowICP_ORBLoop.yaml",
+    "window_orb_loop_no_skip": (
+        ROOT / "Config/Experiment/MACVO/"
+        "MACVO_Fast_WindowICP_ORBLoop_NoSkip.yaml"
+    ),
 }
 
 
