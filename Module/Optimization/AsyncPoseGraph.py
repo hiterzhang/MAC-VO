@@ -132,15 +132,15 @@ class AsyncPoseGraphBackend:
             except queue.Empty:
                 return results
 
-    def close(self):
+    def close(self, timeout=None):
         with self._condition:
             self._stopping = True
             self._condition.notify_all()
-        self._thread.join(timeout=30)
+        self._thread.join(timeout=timeout)
         if self._thread.is_alive():
             raise TimeoutError("pose graph backend did not stop")
 
-    def terminate(self, final_snapshot=None):
+    def terminate(self, final_snapshot=None, timeout=None):
         if final_snapshot is not None:
             self.submit(final_snapshot)
-        self.close()
+        self.close(timeout=timeout)
