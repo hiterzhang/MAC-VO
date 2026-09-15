@@ -19,11 +19,11 @@
 - Modify: `Odometry/WindowMACVO.py`
 - Modify: `Scripts/UnitTest/test_window_frontend_routing.py`
 
-- [ ] **Step 1: Write the failing configuration test**
+- [x] **Step 1: Write the failing configuration test**
 
 Add a test that asserts `MODE_CONFIGS["window_orb_loop_no_skip"]` loads an `OnlineLoopWindowMACVO` configuration with `skip_matching == false` and `online_loop.enabled == true`.
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run:
 
@@ -34,7 +34,7 @@ PYTHONPATH=. /home/zzh/MACVO/.venv/bin/python -m pytest -q -o addopts='' \
 
 Expected: failure because `window_orb_loop_no_skip` is not registered.
 
-- [ ] **Step 3: Add the dedicated configuration and mode**
+- [x] **Step 3: Add the dedicated configuration and mode**
 
 Copy the current online ORB configuration values exactly, changing only:
 
@@ -67,11 +67,11 @@ return depth, adjacent, None
 
 For the CUDA Graph frontend this captures and reuses batch=3; generic frontends retain their pair-estimation fallback.
 
-- [ ] **Step 4: Run the targeted tests and verify GREEN**
+- [x] **Step 4: Run the targeted tests and verify GREEN**
 
 Run the command from Step 2. Expected: all tests pass.
 
-- [ ] **Step 5: Commit the experiment registration**
+- [x] **Step 5: Commit the experiment registration**
 
 ```bash
 git add Config/Experiment/MACVO/MACVO_Fast_WindowICP_ORBLoop_NoSkip.yaml \
@@ -85,7 +85,7 @@ git commit -m "exp: add online WindowICP no-skip variant"
 **Files:**
 - Generated results: `/home/zzh/MACVO/Results/OnlineORBLoop_NoSkip_V203_short/`
 
-- [ ] **Step 1: Run no-skip on V203 `[1095, 1215)`**
+- [x] **Step 1: Run no-skip on V203 `[1095, 1215)`**
 
 ```bash
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. \
@@ -96,11 +96,11 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. \
   --result-root /home/zzh/MACVO/Results/OnlineORBLoop_NoSkip_V203_short
 ```
 
-- [ ] **Step 2: Verify the stability gate**
+- [x] **Step 2: Verify the stability gate**
 
 Require 120 finite poses, zero `skip2` factors, zero unrefined windows, one model, one CUDA Graph, maximum GPU concurrency one, and peak reserved VRAM below 6 GiB.
 
-- [ ] **Step 3: Compare short metrics**
+- [x] **Step 3: Compare short metrics**
 
 Compare against the existing skip-enabled `[1095,1215)` result:
 
@@ -115,7 +115,7 @@ Proceed to the full sequence only if the stability gate passes. Accuracy is reco
 **Files:**
 - Generated results: `/home/zzh/MACVO/Results/OnlineORBLoop_NoSkip_V203_full/`
 
-- [ ] **Step 1: Run all 1865 frames**
+- [x] **Step 1: Run all 1865 frames**
 
 ```bash
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. \
@@ -126,11 +126,11 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH=. \
   --result-root /home/zzh/MACVO/Results/OnlineORBLoop_NoSkip_V203_full
 ```
 
-- [ ] **Step 2: Verify complete result integrity**
+- [x] **Step 2: Verify complete result integrity**
 
 Require provenance status `complete`, exactly 1865 timestamps matching the skip-enabled baseline, finite poses, normalized quaternions, zero `skip2` factors, passing online invariants, and finite metrics.
 
-- [ ] **Step 3: Calculate changes against skip-enabled online ORB**
+- [x] **Step 3: Calculate changes against skip-enabled online ORB**
 
 Use the existing baseline:
 
@@ -149,11 +149,11 @@ Report absolute and percentage changes for ATE/RTE/ROE/RPE and runtime.
 - Create: `docs/validation/online_orb_loop_no_skip_v203.csv`
 - Modify: `docs/WindowICP.md`
 
-- [ ] **Step 1: Add exact short and full metrics**
+- [x] **Step 1: Add exact short and full metrics**
 
 Record result paths, commit, factor counts, loop switch counts, runtime, memory, and interpretation. Explicitly state that this measures the total local-plus-global contribution of skip constraints.
 
-- [ ] **Step 2: Run all non-local tests and sidecar test**
+- [x] **Step 2: Run all non-local tests and sidecar test**
 
 ```bash
 PYTHONPATH=. /home/zzh/MACVO/.venv/bin/python -m pytest -q \
