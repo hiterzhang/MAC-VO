@@ -15,15 +15,15 @@
 **Files:**
 - Modify: `Scripts/UnitTest/test_async_pose_graph.py`
 
-- [ ] **Step 1: Add a failing default-drain test**
+- [x] **Step 1: Add a failing default-drain test**
 
 Create a two-call blocking solver. Start snapshot 1, call `terminate(snapshot(9), timeout=None)` on another thread, verify termination remains blocked until call 1 is released, then verify snapshot 9 is also solved and the worker exits.
 
-- [ ] **Step 2: Add a failing explicit-timeout test**
+- [x] **Step 2: Add a failing explicit-timeout test**
 
 Start a blocked solve and call `close(timeout=0.01)`. Require `TimeoutError`; release the solver and require a later `close(timeout=1)` to succeed.
 
-- [ ] **Step 3: Run RED**
+- [x] **Step 3: Run RED**
 
 ```bash
 PYTHONPATH=. /home/zzh/MACVO/.venv/bin/python -m pytest -q -o addopts='' \
@@ -37,7 +37,7 @@ Expected: failure because `close` and `terminate` do not accept `timeout`.
 **Files:**
 - Modify: `Module/Optimization/AsyncPoseGraph.py`
 
-- [ ] **Step 1: Extend `close`**
+- [x] **Step 1: Extend `close`**
 
 Implement:
 
@@ -51,7 +51,7 @@ def close(self, timeout=None):
         raise TimeoutError("pose graph backend did not stop")
 ```
 
-- [ ] **Step 2: Extend `terminate`**
+- [x] **Step 2: Extend `terminate`**
 
 Implement:
 
@@ -62,11 +62,11 @@ def terminate(self, final_snapshot=None, timeout=None):
     self.close(timeout=timeout)
 ```
 
-- [ ] **Step 3: Run GREEN**
+- [x] **Step 3: Run GREEN**
 
 Run the Task 1 test command. Expected: all async backend tests pass.
 
-- [ ] **Step 4: Run online termination regression tests**
+- [x] **Step 4: Run online termination regression tests**
 
 ```bash
 PYTHONPATH=. /home/zzh/MACVO/.venv/bin/python -m pytest -q -o addopts='' \
@@ -74,7 +74,7 @@ PYTHONPATH=. /home/zzh/MACVO/.venv/bin/python -m pytest -q -o addopts='' \
   Scripts/UnitTest/test_online_loop_window_macvo.py
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Module/Optimization/AsyncPoseGraph.py \
@@ -87,7 +87,7 @@ git commit -m "fix: drain pose graph backend on shutdown"
 **Files:**
 - Modify: `docs/WindowICP.md` only if it does not overlap the existing user edit
 
-- [ ] **Step 1: Run all non-local tests**
+- [x] **Step 1: Run all non-local tests**
 
 ```bash
 PYTHONPATH=. /home/zzh/MACVO/.venv/bin/python -m pytest -q \
@@ -96,14 +96,14 @@ PYTHONPATH=. /home/zzh/MACVO/.venv/bin/python -m pytest -q \
   -o addopts='' Scripts/UnitTest/test_orb_bow_sidecar.py
 ```
 
-- [ ] **Step 2: Replay the MH05 archive solver**
+- [x] **Step 2: Replay the MH05 archive solver**
 
 Load the existing 2192-pose, 4463-factor archive and solve ten iterations. Require a refined finite result and record the solve duration. This verifies the workload that previously participated in the two-solve shutdown sequence.
 
-- [ ] **Step 3: Preserve user changes**
+- [x] **Step 3: Preserve user changes**
 
 Do not stage or modify the existing uncommitted MH04 command in `docs/WindowICP.md`. If documenting the shutdown fix would overlap that file, report the result without editing it.
 
-- [ ] **Step 4: Confirm isolation**
+- [x] **Step 4: Confirm isolation**
 
 Keep `experiment/window-icp-global-v03` and its worktree. Do not merge, push, or clean up automatically.
