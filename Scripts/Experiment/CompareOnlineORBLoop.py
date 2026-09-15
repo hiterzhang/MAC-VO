@@ -30,6 +30,11 @@ MODE_CONFIGS = {
         "MACVO_Fast_WindowICP_ORBLoop_NoSkip.yaml"
     ),
 }
+ONLINE_DIAGNOSTIC_MODES = frozenset({
+    "window_pose_graph",
+    "window_orb_loop",
+    "window_orb_loop_no_skip",
+})
 
 
 def build_parser():
@@ -62,6 +67,10 @@ def online_invariants(diagnostics):
         ) < 6 * 1024**3,
     }
     return {"passed": all(checks.values()), "checks": checks}
+
+
+def uses_online_diagnostics(mode):
+    return mode in ONLINE_DIAGNOSTIC_MODES
 
 
 def loop_switch_summary(diagnostics, threshold=0.01, long_gap=100):
@@ -179,7 +188,7 @@ def main(argv=None):
         row["unrefined_windows"] = sum(
             item["status"] != "refined" for item in window["windows"]
         )
-        if mode in {"window_pose_graph", "window_orb_loop"}:
+        if uses_online_diagnostics(mode):
             diagnostics = json.loads(
                 (space / "online_loop_diagnostics.json").read_text()
             )

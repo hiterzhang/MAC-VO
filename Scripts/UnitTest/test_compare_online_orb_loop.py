@@ -8,6 +8,7 @@ from Scripts.Experiment.CompareOnlineORBLoop import (
     build_parser,
     loop_switch_summary,
     online_invariants,
+    uses_online_diagnostics,
     write_rows,
 )
 from Utility.Config import load_config
@@ -81,6 +82,7 @@ class CompareOnlineORBLoopTests(unittest.TestCase):
         self.assertTrue(
             config["Odometry"]["args"]["online_loop"]["enabled"]
         )
+        self.assertTrue(uses_online_diagnostics("window_orb_loop_no_skip"))
 
 
 if __name__ == "__main__":
