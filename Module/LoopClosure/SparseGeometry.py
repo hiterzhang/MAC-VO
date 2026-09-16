@@ -280,7 +280,7 @@ def validate_sparse_loop(
     config,
     seed,
 ):
-    matches = torch.as_tensor(matches).double()
+    matches = torch.tensor(matches, dtype=torch.float64)
     if matches.ndim != 2 or matches.shape[1] != 5:
         raise ValueError("ORB sparse matches must have shape Nx5")
     count = len(matches)
@@ -319,10 +319,14 @@ def validate_sparse_loop(
             source, target, count, "missing_depth_covariance", metrics
         )
 
-    depth_a = _sample_bilinear(uv_a, source_depth.depth).squeeze(-1)
-    depth_b = _sample_bilinear(uv_b, target_depth.depth).squeeze(-1)
-    depth_cov_a = _sample_bilinear(uv_a, source_depth.cov).squeeze(-1)
-    depth_cov_b = _sample_bilinear(uv_b, target_depth.cov).squeeze(-1)
+    depth_a = _sample_bilinear(uv_a, source_depth.depth).squeeze(-1).cpu().double()
+    depth_b = _sample_bilinear(uv_b, target_depth.depth).squeeze(-1).cpu().double()
+    depth_cov_a = _sample_bilinear(
+        uv_a, source_depth.cov
+    ).squeeze(-1).cpu().double()
+    depth_cov_b = _sample_bilinear(
+        uv_b, target_depth.cov
+    ).squeeze(-1).cpu().double()
     valid_depth = (
         torch.isfinite(depth_a)
         & torch.isfinite(depth_b)

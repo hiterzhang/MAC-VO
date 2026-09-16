@@ -242,6 +242,30 @@ class SparseLoopValidationTests(unittest.TestCase):
         expected_rotation = 1 / float(torch.deg2rad(torch.tensor(10.0))) ** 2
         self.assertAlmostEqual(float(factor.information[3, 3]), expected_rotation, places=4)
 
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
+    def test_cuda_depth_maps_accept_cpu_orb_matches(self):
+        source_depth = depth_output()
+        target_depth = depth_output()
+        source_depth.depth = source_depth.depth.cuda()
+        source_depth.cov = source_depth.cov.cuda()
+        target_depth.depth = target_depth.depth.cuda()
+        target_depth.cov = target_depth.cov.cuda()
+
+        result = validate_sparse_loop(
+            source=10,
+            target=100,
+            matches=covered_matches(),
+            source_stereo=stereo_data(),
+            target_stereo=stereo_data(),
+            source_depth=source_depth,
+            target_depth=target_depth,
+            covariance_model=IdentityCovariance(),
+            config=self.config(),
+            seed=7,
+        )
+
+        self.assertIsNone(result.reason)
+
 
 if __name__ == "__main__":
     unittest.main()
