@@ -194,7 +194,11 @@ class ORBLoopCandidateProvider:
 
     @property
     def enabled(self):
-        return self.process is not None and self.process.poll() is None
+        return (
+            self.status.get("status") == "ready"
+            and self.process is not None
+            and self.process.poll() is None
+        )
 
     def _read_responses(self):
         assert self.process is not None and self.process.stdout is not None
@@ -234,6 +238,9 @@ class ORBLoopCandidateProvider:
                     }
             except Exception as error:
                 self.status = {"status": "error", "reason": str(error)}
+                if self.process is not None and self.process.poll() is None:
+                    self.process.terminate()
+                break
         if not self._closed and self.status.get("status") == "ready":
             self.status = {
                 "status": "disabled",

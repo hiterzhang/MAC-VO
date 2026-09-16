@@ -227,7 +227,7 @@ def estimate_se3_ransac(
     if best_measurement is None or best_mask is None or best_count < 3:
         return _failure(count, "no_consensus", singular)
 
-    for _ in range(2):
+    for _ in range(8):
         measurement = _weighted_kabsch(
             points_a[best_mask],
             points_b[best_mask],
@@ -236,9 +236,21 @@ def estimate_se3_ransac(
         distance = _mahalanobis(
             measurement, points_a, points_b, cov_a, cov_b
         )
-        best_mask = distance <= mahalanobis_threshold
-        if int(best_mask.sum()) < 3:
+        updated_mask = distance <= mahalanobis_threshold
+        if int(updated_mask.sum()) < 3:
             return _failure(count, "no_consensus", singular)
+        if torch.equal(updated_mask, best_mask):
+            break
+        best_mask = updated_mask
+
+    measurement = _weighted_kabsch(
+        points_a[best_mask],
+        points_b[best_mask],
+        (cov_a + cov_b)[best_mask],
+    )
+    distance = _mahalanobis(
+        measurement, points_a, points_b, cov_a, cov_b
+    )
 
     final_valid, singular = _geometry_valid(
         points_a[best_mask], points_b[best_mask], min_geometry_ratio

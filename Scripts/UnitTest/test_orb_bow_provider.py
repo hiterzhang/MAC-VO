@@ -13,7 +13,14 @@ from Module.LoopClosure.ORBBoW import (
 )
 
 
-def fake_sidecar(path, version=2):
+def fake_sidecar(path, version=2, malformed=False):
+    response = (
+        "RESULT\\t{request}\\t{target}\\t1\\tbad"
+        if malformed else
+        "RESULT\\t{request}\\t{target}\\t2"
+        "\\t0:0.9:120:80:2:10,20,12,22,4;30,40,31,41,8"
+        "\\t5:0.8:90:50:1:4,5,6,7,12"
+    )
     source = textwrap.dedent("""\
         #!/usr/bin/env python3
         import sys
@@ -25,15 +32,10 @@ def fake_sidecar(path, version=2):
                 break
             if fields[0]=='QUERY':
                 request,target=fields[1],fields[2]
-                print(
-                    f'RESULT\\t{request}\\t{target}\\t2'
-                    '\\t0:0.9:120:80:2:10,20,12,22,4;30,40,31,41,8'
-                    '\\t5:0.8:90:50:1:4,5,6,7,12',
-                    flush=True,
-                )
+                print(f'RESPONSE', flush=True)
             else:
                 print('ERROR\\tbad command', flush=True)
-    """).replace("VERSION", str(version))
+    """).replace("VERSION", str(version)).replace("RESPONSE", response)
     path.write_text(source, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
@@ -116,6 +118,33 @@ class ORBBoWProviderTests(unittest.TestCase):
 
             self.assertFalse(provider.enabled)
             self.assertIn("handshake", provider.status["reason"])
+
+    def test_malformed_response_disables_provider(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            executable = directory / "sidecar.py"
+            vocabulary = directory / "vocab.txt"
+            image = directory / "left.png"
+            fake_sidecar(executable, malformed=True)
+            vocabulary.write_text("fixture")
+            image.write_bytes(b"fixture")
+            provider = ORBLoopCandidateProvider(
+                executable=executable,
+                vocabulary=vocabulary,
+                min_temporal_gap=30,
+                top_k=3,
+            )
+
+            provider.submit(frame_id=40, left_image_path=image)
+            deadline = time.time() + 2
+            while provider.status.get("status") != "error" and time.time() < deadline:
+                time.sleep(0.01)
+
+            self.assertEqual(provider.status["status"], "error")
+            self.assertFalse(provider.enabled)
+            with self.assertRaisesRegex(RuntimeError, "disabled"):
+                provider.submit(frame_id=45, left_image_path=image)
+            provider.close()
 
     def test_filter_removes_existing_pending_and_nms_near_pairs(self):
         candidates = [(0, 0.9), (5, 0.8), (100, 0.7)]

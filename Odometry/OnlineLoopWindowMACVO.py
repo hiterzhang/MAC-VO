@@ -283,9 +283,33 @@ class OnlineLoopWindowMACVO(WindowMACVO):
                     dropped_target, dropped = self.loop_candidates.popleft()
                     dropped_pair = (dropped.source, dropped_target)
                     self.pending_loop_pairs.discard(dropped_pair)
-                    self.pending_targets.pop(dropped_target)
+                    if (
+                        dropped_target != response.target
+                        and not any(
+                            queued_target == dropped_target
+                            for queued_target, _ in self.loop_candidates
+                        )
+                    ):
+                        self.pending_targets.pop(dropped_target)
                 self.pending_loop_pairs.add(pair)
                 self.loop_candidates.append((response.target, candidate))
+
+    def _release_pending_target(self, target_id):
+        if not any(
+            queued_target == target_id
+            for queued_target, _ in self.loop_candidates
+        ):
+            self.pending_targets.pop(target_id)
+
+    def _expire_sparse_hypotheses(self, current_target):
+        if getattr(self, "validation_mode", "legacy_dense") != "sparse_se3":
+            return
+        for hypothesis_id in self.hypothesis_tracker.expire(current_target):
+            self.hypothesis_records.append({
+                "hypothesis_id": hypothesis_id,
+                "target": current_target,
+                "state": "expired",
+            })
 
     def _validate_sparse_candidate(self, source, target, candidate):
         if candidate.mutual_matches < self.sparse_geometry_config.min_mutual_matches:
@@ -349,13 +373,6 @@ class OnlineLoopWindowMACVO(WindowMACVO):
                 "rank": int(candidate.rank),
             },
         )
-        expired = self.hypothesis_tracker.expire(validation.target)
-        for hypothesis_id in expired:
-            self.hypothesis_records.append({
-                "hypothesis_id": hypothesis_id,
-                "target": validation.target,
-                "state": "expired",
-            })
         update = self.hypothesis_tracker.add(support)
         self.hypothesis_records.append({
             "hypothesis_id": update.hypothesis_id,
@@ -401,6 +418,10 @@ class OnlineLoopWindowMACVO(WindowMACVO):
             ),
             "observations": factor.observation_count,
             "confidence": factor.confidence,
+            "bow_score": float(candidate.score),
+            "rank": int(candidate.rank),
+            "metrics": emitted.metrics,
+            "measurement_se3": emitted.measurement.tolist(),
             "information_eigenvalues": eigenvalues.tolist(),
         })
         self.pose_backend.submit(self._pose_graph_snapshot())
@@ -424,16 +445,43 @@ class OnlineLoopWindowMACVO(WindowMACVO):
                 "target": target_id,
                 "status": "expired",
             })
+            self._release_pending_target(target_id)
             return False
-        source = self.loop_keyframes.load(candidate.source)
-        source.stereo.imageL = source.stereo.imageL.to(target.stereo.imageL)
-        source.stereo.imageR = source.stereo.imageR.to(target.stereo.imageR)
-        if self.validation_mode == "sparse_se3":
-            validation = self._validate_sparse_candidate(
-                source, target, candidate
-            )
+        try:
+            source = self.loop_keyframes.load(candidate.source)
+            source.stereo.imageL = source.stereo.imageL.to(target.stereo.imageL)
+            source.stereo.imageR = source.stereo.imageR.to(target.stereo.imageR)
+        except Exception as error:
             self.last_loop_match_frame = current_frame_id
-            self.pending_targets.pop(target_id)
+            self._release_pending_target(target_id)
+            self.rejected_loop_pairs.add(pair)
+            self.loop_records.append({
+                "source": candidate.source,
+                "target": target_id,
+                "bow_score": candidate.score,
+                "status": "validation_failed",
+                "reason": str(error),
+            })
+            return False
+        if self.validation_mode == "sparse_se3":
+            try:
+                validation = self._validate_sparse_candidate(
+                    source, target, candidate
+                )
+            except Exception as error:
+                self.last_loop_match_frame = current_frame_id
+                self._release_pending_target(target_id)
+                self.rejected_loop_pairs.add(pair)
+                self.loop_records.append({
+                    "source": candidate.source,
+                    "target": target_id,
+                    "bow_score": candidate.score,
+                    "status": "validation_failed",
+                    "reason": str(error),
+                })
+                return False
+            self.last_loop_match_frame = current_frame_id
+            self._release_pending_target(target_id)
             if validation.reason is not None:
                 self.rejected_loop_pairs.add(pair)
                 self.loop_records.append({
@@ -496,7 +544,7 @@ class OnlineLoopWindowMACVO(WindowMACVO):
             config=validation_config,
         )
         self.last_loop_match_frame = current_frame_id
-        self.pending_targets.pop(target_id)
+        self._release_pending_target(target_id)
         if validation.record is None:
             self.rejected_loop_pairs.add(pair)
             self.loop_records.append({
@@ -576,6 +624,7 @@ class OnlineLoopWindowMACVO(WindowMACVO):
         self._compress_and_store(adjacent, "adjacent")
         self._compress_and_store(skip, "skip2")
         frame_id = self.prev_keyframe[1]
+        self._expire_sparse_hypotheses(frame_id)
         self._publish_loop_keyframe(frame, depth, frame_id)
         self._poll_orb_candidates()
         self._process_one_loop_candidate(frame_id)

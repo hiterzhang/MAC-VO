@@ -16,6 +16,7 @@ from Module.LoopClosure.ORBBoW import (
 from Module.LoopClosure.LoopHypothesis import (
     HypothesisConfig,
     LoopHypothesisTracker,
+    LoopSupport,
 )
 from Module.LoopClosure.SparseGeometry import (
     SparseGeometryConfig,
@@ -220,6 +221,75 @@ class OnlineLoopWindowMACVOTests(unittest.TestCase):
         self.assertAlmostEqual(float(stored.information[0, 0]), 16.0)
         system.compress_edge.assert_not_called()
         system.pose_backend.submit.assert_called_once_with("snapshot")
+        accepted = next(
+            item for item in system.loop_records
+            if item["status"] == "accepted_sparse"
+        )
+        self.assertEqual(accepted["bow_score"], 0.2)
+        self.assertEqual(accepted["metrics"]["ransac_inliers"], 40)
+        self.assertEqual(len(accepted["measurement_se3"]), 7)
+
+    def test_sparse_validation_exception_does_not_stop_odometry(self):
+        system = OnlineLoopWindowMACVO.__new__(OnlineLoopWindowMACVO)
+        candidate = sparse_candidate(0, 50)
+        system.loop_candidates = __import__("collections").deque([(50, candidate)])
+        system.last_loop_match_frame = -10**9
+        system.min_frames_between_loop_matches = 0
+        system.pending_loop_pairs = {(0, 50)}
+        target = SimpleNamespace(frame_id=50, stereo=SimpleNamespace())
+        system.pending_targets = SimpleNamespace(get=lambda _: target, pop=Mock())
+        system.loop_keyframes = SimpleNamespace(
+            records={0: object()},
+            load=Mock(side_effect=OSError("corrupt image")),
+        )
+        system.rejected_loop_pairs = set()
+        system.loop_records = []
+        system.validation_mode = "sparse_se3"
+
+        result = system._process_one_loop_candidate(50)
+
+        self.assertFalse(result)
+        self.assertIn((0, 50), system.rejected_loop_pairs)
+        self.assertEqual(system.loop_records[-1]["status"], "validation_failed")
+        system.pending_targets.pop.assert_called_once_with(50)
+
+    def test_sparse_hypotheses_expire_without_new_candidate(self):
+        system = OnlineLoopWindowMACVO.__new__(OnlineLoopWindowMACVO)
+        system.validation_mode = "sparse_se3"
+        system.hypothesis_tracker = LoopHypothesisTracker(HypothesisConfig(
+            target_support_frames=10
+        ))
+        system.hypothesis_records = []
+        identity = pp.identity_SE3(dtype=torch.float64).tensor()
+        update = system.hypothesis_tracker.add(LoopSupport(
+            source=0,
+            target=20,
+            measurement=identity,
+            correction=identity,
+            quality=(1,),
+            metrics={},
+        ))
+
+        system._expire_sparse_hypotheses(31)
+
+        self.assertEqual(system.hypothesis_records[-1], {
+            "hypothesis_id": update.hypothesis_id,
+            "target": 31,
+            "state": "expired",
+        })
+
+    def test_pending_target_is_released_after_last_queued_candidate(self):
+        system = OnlineLoopWindowMACVO.__new__(OnlineLoopWindowMACVO)
+        system.pending_targets = SimpleNamespace(pop=Mock())
+        system.loop_candidates = __import__("collections").deque([
+            (50, sparse_candidate(5, 50))
+        ])
+
+        system._release_pending_target(50)
+        system.pending_targets.pop.assert_not_called()
+        system.loop_candidates.clear()
+        system._release_pending_target(50)
+        system.pending_targets.pop.assert_called_once_with(50)
 
     def test_sparse_diagnostic_payload_contains_thresholds_and_hypotheses(self):
         system = OnlineLoopWindowMACVO.__new__(OnlineLoopWindowMACVO)
