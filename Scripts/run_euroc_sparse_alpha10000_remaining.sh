@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -uo pipefail
+set -Eeuo pipefail
 
 SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKTREE="${WORKTREE:-$SCRIPT_ROOT}"
@@ -34,16 +34,13 @@ STATE_DIR="$RESULT_ROOT/.batch_state"
 LOG_DIR="$RESULT_ROOT/logs"
 BATCH_LOG="$RESULT_ROOT/batch.log"
 SUMMARY="$RESULT_ROOT/summary.tsv"
-mkdir -p "$STATE_DIR" "$LOG_DIR"
-
-exec 9>"$RESULT_ROOT/.batch.lock"
-if ! flock -n 9; then
-    echo -e "LOCKED\t$RESULT_ROOT"
-    exit 3
-fi
 
 emit() {
-    echo -e "$*" | tee -a "$BATCH_LOG"
+    if [[ "$DRY_RUN" == "1" ]]; then
+        echo -e "$*"
+    else
+        echo -e "$*" | tee -a "$BATCH_LOG"
+    fi
 }
 
 missing=0
@@ -94,6 +91,15 @@ if (( missing )); then
     exit 2
 fi
 
+if [[ "$DRY_RUN" != "1" ]]; then
+    mkdir -p "$STATE_DIR" "$LOG_DIR"
+    exec 9>"$RESULT_ROOT/.batch.lock"
+    if ! flock -n 9; then
+        echo -e "LOCKED\t$RESULT_ROOT"
+        exit 3
+    fi
+fi
+
 completed_result() {
     "$PYTHON" - "$RESULT_ROOT" "$1" <<'PY'
 from pathlib import Path
@@ -105,8 +111,11 @@ for path in root.rglob("metrics.json") if root.exists() else ():
         rows = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         continue
+    if not isinstance(rows, list):
+        continue
     if any(
-        row.get("sequence") == sequence
+        isinstance(row, dict)
+        and row.get("sequence") == sequence
         and row.get("mode") == "window_orb_loop_sparse"
         for row in rows
     ):
@@ -123,9 +132,12 @@ from pathlib import Path
 import json, sys
 folder, sequence = Path(sys.argv[1]), sys.argv[2]
 rows = json.loads((folder / "metrics.json").read_text(encoding="utf-8"))
+if not isinstance(rows, list):
+    raise ValueError("metrics payload must be a list")
 row = next(
     item for item in rows
-    if item.get("sequence") == sequence
+    if isinstance(item, dict)
+    and item.get("sequence") == sequence
     and item.get("mode") == "window_orb_loop_sparse"
 )
 values = [
@@ -138,7 +150,9 @@ print("\t".join(str(value) for value in values))
 PY
 }
 
-printf "sequence\tstatus\tresult_dir\tRMSE_ATE\tRMSE_RTE\tRMSE_ROE\tRMSE_RPE\truntime_mean_ms\tloop_factors\teffective_long_loops_001\tpeak_vram_bytes\n" > "$SUMMARY"
+if [[ "$DRY_RUN" != "1" && ! -s "$SUMMARY" ]]; then
+    printf "sequence\tstatus\tresult_dir\tRMSE_ATE\tRMSE_RTE\tRMSE_ROE\tRMSE_RPE\truntime_mean_ms\tloop_factors\teffective_long_loops_001\tpeak_vram_bytes\n" > "$SUMMARY"
+fi
 
 successful=()
 skipped=()
@@ -157,7 +171,9 @@ for sequence in "${SEQUENCES[@]}"; do
     existing="$(completed_result "$sequence")"
     if [[ -f "$complete_marker" && -n "$existing" ]]; then
         emit "SKIP\t$sequence\t$existing"
-        printf "%s\tskipped\t%s\t\t\t\t\t\t\t\t\n" "$sequence" "$existing" >> "$SUMMARY"
+        if [[ "$DRY_RUN" != "1" ]]; then
+            printf "%s\tskipped\t%s\t\t\t\t\t\t\t\t\n" "$sequence" "$existing" >> "$SUMMARY"
+        fi
         skipped+=("$sequence")
         continue
     fi
@@ -165,19 +181,17 @@ for sequence in "${SEQUENCES[@]}"; do
     emit "RUN\t$sequence"
     log_file="$LOG_DIR/${sequence}.log"
     if [[ "$DRY_RUN" == "1" ]]; then
-        echo "$PYTHON Scripts/Experiment/CompareOnlineORBLoop.py --sequence $sequence --seq-from 0 --seed 0 --modes window_orb_loop_sparse --result-root $RESULT_ROOT" | tee -a "$log_file" "$BATCH_LOG"
+        echo "$PYTHON Scripts/Experiment/CompareOnlineORBLoop.py --sequence $sequence --seq-from 0 --seed 0 --modes window_orb_loop_sparse --result-root $RESULT_ROOT"
         if [[ "${DRY_RUN_FAIL_SEQUENCE:-}" == "$sequence" ]]; then
             emit "FAIL\t$sequence\tdry-run"
-            printf "%s\tfailed\t\t\t\t\t\t\t\t\t\n" "$sequence" >> "$SUMMARY"
             failed+=("$sequence")
             continue
         fi
-        printf "%s\tscheduled\t\t\t\t\t\t\t\t\t\n" "$sequence" >> "$SUMMARY"
         successful+=("$sequence")
         continue
     fi
 
-    rm -f "$failed_marker"
+    rm -f "$complete_marker" "$failed_marker"
     if "$PYTHON" Scripts/Experiment/CompareOnlineORBLoop.py \
         --sequence "$sequence" --seq-from 0 --seed 0 \
         --modes window_orb_loop_sparse --result-root "$RESULT_ROOT" \
@@ -185,15 +199,18 @@ for sequence in "${SEQUENCES[@]}"; do
         result="$(completed_result "$sequence")"
         if [[ -z "$result" ]]; then
             emit "FAIL\t$sequence\tmissing metrics"
+            marker_tmp="$(mktemp "$STATE_DIR/.${sequence}.failed.XXXXXX")"
+            echo "missing metrics $(date --iso-8601=seconds)" > "$marker_tmp"
+            mv "$marker_tmp" "$failed_marker"
             printf "%s\tfailed\t\t\t\t\t\t\t\t\t\n" "$sequence" >> "$SUMMARY"
             failed+=("$sequence")
             continue
         fi
+        metrics="$(summary_row "$result" "$sequence")"
+        printf "%s\tcomplete\t%s\t%s\n" "$sequence" "$result" "$metrics" >> "$SUMMARY"
         marker_tmp="$(mktemp "$STATE_DIR/.${sequence}.complete.XXXXXX")"
         echo "$result" > "$marker_tmp"
         mv "$marker_tmp" "$complete_marker"
-        metrics="$(summary_row "$result" "$sequence")"
-        printf "%s\tcomplete\t%s\t%s\n" "$sequence" "$result" "$metrics" >> "$SUMMARY"
         emit "DONE\t$sequence\t$result"
         successful+=("$sequence")
     else
