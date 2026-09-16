@@ -39,8 +39,8 @@ class FakeCache:
         self.metadata = {"source_id": source.metadata["source_id"]}
 
     def depth_output(self, frame_id):
-        values = torch.ones(1, 1, 2, 2)
-        return IStereoDepth.Output(depth=values, cov=values.clone())
+        values = torch.full((1, 1, 2, 2), float(frame_id))
+        return IStereoDepth.Output(depth=values, cov=torch.ones_like(values))
 
 
 def source_archive(count=26):
@@ -92,7 +92,7 @@ class FakeFrontend:
         self.calls.append((source.tag, target.tag))
         if target.tag == self.fail_target:
             raise RuntimeError("frontend failed")
-        return SimpleNamespace(frame_id=target.tag), object(), object()
+        return SimpleNamespace(frame_id=source.tag), object(), object()
 
 
 def make_record(selected):
@@ -116,11 +116,15 @@ class FakeValidator:
     def __init__(self, reject_pairs=()):
         self.reject_pairs = set(reject_pairs)
         self.calls = []
+        self.target_depth_ids = []
 
     def __call__(self, **kwargs):
         selected = kwargs["candidate"]
         pair = (selected.source, selected.target)
         self.calls.append(pair)
+        self.target_depth_ids.append(
+            int(kwargs["target_depth"].depth[0, 0, 0, 0])
+        )
         if pair in self.reject_pairs:
             return ProximityValidationResult(
                 None, "rejected_fixture", {"reason": "rejected_fixture"}
@@ -153,7 +157,8 @@ def generation_inputs(**updates):
 
 class GenerateProximityICPTests(unittest.TestCase):
     def test_generator_processes_targets_chronologically_and_adds_at_most_one_edge(self):
-        result = generate_proximity_archive(**generation_inputs())
+        validator = FakeValidator()
+        result = generate_proximity_archive(**generation_inputs(validator=validator))
 
         self.assertEqual(result.diagnostics["targets"], [15, 20, 25])
         self.assertEqual(result.diagnostics["accepted_edges"], 3)
@@ -161,6 +166,7 @@ class GenerateProximityICPTests(unittest.TestCase):
             [(edge.a, edge.b) for edge in result.archive.edges],
             [(0, 15), (5, 20), (10, 25)],
         )
+        self.assertEqual(validator.target_depth_ids, [15, 20, 25])
 
     def test_failed_match_does_not_nms_suppress_future_candidate(self):
         selector = FakeSelector()

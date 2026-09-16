@@ -20,6 +20,17 @@ from Module.LoopClosure.OnlineLoopStore import (
     PendingLoopTarget,
     PendingLoopTargetStore,
 )
+from Module.LoopClosure.LoopHypothesis import (
+    HypothesisConfig,
+    LoopHypothesisTracker,
+    LoopSupport,
+)
+from Module.LoopClosure.SparseGeometry import (
+    SparseGeometryConfig,
+    SparseLoopResult,
+    conservative_sparse_factor,
+    validate_sparse_loop,
+)
 from Module.Optimization.AsyncPoseGraph import (
     AsyncPoseGraphBackend,
     PoseGraphSnapshot,
@@ -66,6 +77,17 @@ class OnlineLoopWindowMACVO(WindowMACVO):
         self.min_frames_between_loop_matches = int(
             getattr(online_loop, "min_frames_between_loop_matches", 25)
         )
+        self.validation_mode = str(
+            getattr(online_loop, "validation_mode", "legacy_dense")
+        )
+        if self.validation_mode not in {"legacy_dense", "sparse_se3"}:
+            raise ValueError("unknown online loop validation mode")
+        self.orb_ratio_test = float(
+            getattr(online_loop, "orb_ratio_test", 0.80)
+        )
+        self.orb_max_matches = int(
+            getattr(online_loop, "orb_max_matches", 300)
+        )
         self.orb_sidecar = str(online_loop.orb_sidecar)
         self.orb_vocabulary = str(online_loop.vocabulary)
         self.pairwise_iterations = int(pairwise_icp.iterations)
@@ -80,6 +102,7 @@ class OnlineLoopWindowMACVO(WindowMACVO):
         self.pose_graph_version = 0
         self.compression_records = []
         self.loop_records = []
+        self.hypothesis_records = []
         self.loop_candidates = deque(maxlen=self.max_candidate_queue)
         self.existing_loop_pairs = set()
         self.pending_loop_pairs = set()
@@ -103,6 +126,25 @@ class OnlineLoopWindowMACVO(WindowMACVO):
                 switch_prior=self.switch_prior,
             )
         )
+        sparse_geometry = getattr(online_loop, "sparse_geometry", None)
+        hypothesis = getattr(online_loop, "hypothesis", None)
+        sparse_factor = getattr(online_loop, "sparse_factor", None)
+        self.sparse_geometry_config = SparseGeometryConfig(
+            **({} if sparse_geometry is None else vars(sparse_geometry))
+        )
+        self.hypothesis_tracker = LoopHypothesisTracker(HypothesisConfig(
+            **({} if hypothesis is None else vars(hypothesis))
+        ))
+        self.sparse_translation_sigma = float(
+            0.25 if sparse_factor is None
+            else sparse_factor.translation_sigma_m
+        )
+        self.sparse_rotation_sigma_deg = float(
+            10.0 if sparse_factor is None
+            else sparse_factor.rotation_sigma_deg
+        )
+        self.sparse_validator = validate_sparse_loop
+        self.sparse_factor_builder = conservative_sparse_factor
         self._wrap_frontend_once()
 
     @classmethod
@@ -139,6 +181,8 @@ class OnlineLoopWindowMACVO(WindowMACVO):
                     vocabulary=Path(self.orb_vocabulary),
                     min_temporal_gap=self.loop_min_temporal_gap,
                     top_k=self.bow_top_k,
+                    ratio_test=getattr(self, "orb_ratio_test", 0.80),
+                    max_matches=getattr(self, "orb_max_matches", 300),
                     queue_size=self.max_candidate_queue,
                 )
             else:
@@ -217,7 +261,7 @@ class OnlineLoopWindowMACVO(WindowMACVO):
             return
         for response in self.loop_provider.poll():
             raw = [
-                (candidate.source, candidate.score)
+                candidate
                 for candidate in response.candidates
                 if candidate.score >= self.min_bow_score
             ]
@@ -243,6 +287,125 @@ class OnlineLoopWindowMACVO(WindowMACVO):
                 self.pending_loop_pairs.add(pair)
                 self.loop_candidates.append((response.target, candidate))
 
+    def _validate_sparse_candidate(self, source, target, candidate):
+        if candidate.mutual_matches < self.sparse_geometry_config.min_mutual_matches:
+            return SparseLoopResult(
+                source=candidate.source,
+                target=int(getattr(target, "frame_id", -1)),
+                measurement=None,
+                inlier_mask=torch.zeros(candidate.mutual_matches, dtype=torch.bool),
+                metrics={
+                    "raw_knn_matches": candidate.raw_knn_matches,
+                    "ratio_matches": candidate.ratio_matches,
+                    "mutual_matches": candidate.mutual_matches,
+                },
+                reason="insufficient_mutual_matches",
+            )
+        source_depth = self.Frontend.estimate_loop_depth(source.stereo)
+        result = self.sparse_validator(
+            source=candidate.source,
+            target=target.frame_id,
+            matches=candidate.matches,
+            source_stereo=source.stereo,
+            target_stereo=target.stereo,
+            source_depth=source_depth,
+            target_depth=depth_output_to_device(target.depth, self.device),
+            covariance_model=self.ObsCovModel,
+            config=self.sparse_geometry_config,
+            seed=1000003 + candidate.source * 1009 + target.frame_id,
+        )
+        result.metrics.update({
+            "raw_knn_matches": candidate.raw_knn_matches,
+            "ratio_matches": candidate.ratio_matches,
+            "mutual_matches": candidate.mutual_matches,
+        })
+        return result
+
+    def _register_sparse_support(self, candidate, validation):
+        poses = pp.SE3(self.graph.frames.data["pose"].tensor.double())
+        measurement = pp.SE3(validation.measurement)
+        correction = (
+            poses[validation.source] @ measurement @ poses[validation.target].Inv()
+        ).tensor()
+        metrics = dict(validation.metrics)
+        reprojection_p90 = max(
+            float(metrics.get("reprojection_forward_p90_px", float("inf"))),
+            float(metrics.get("reprojection_backward_p90_px", float("inf"))),
+        )
+        support = LoopSupport(
+            source=validation.source,
+            target=validation.target,
+            measurement=validation.measurement,
+            correction=correction,
+            quality=(
+                int(metrics["ransac_inliers"]),
+                float(metrics["ransac_ratio"]),
+                int(metrics.get("final_grid_cells", 0)),
+                -reprojection_p90,
+                float(candidate.score),
+            ),
+            metrics=metrics | {
+                "bow_score": float(candidate.score),
+                "rank": int(candidate.rank),
+            },
+        )
+        expired = self.hypothesis_tracker.expire(validation.target)
+        for hypothesis_id in expired:
+            self.hypothesis_records.append({
+                "hypothesis_id": hypothesis_id,
+                "target": validation.target,
+                "state": "expired",
+            })
+        update = self.hypothesis_tracker.add(support)
+        self.hypothesis_records.append({
+            "hypothesis_id": update.hypothesis_id,
+            "source": validation.source,
+            "target": validation.target,
+            "state": update.state,
+            "reason": update.reason,
+            "support_count": next((
+                len(item.supports)
+                for item in self.hypothesis_tracker.hypotheses
+                if item.hypothesis_id == update.hypothesis_id
+            ), 0),
+        })
+        if update.emitted is None:
+            return False
+        emitted = update.emitted
+        factor = self.sparse_factor_builder(
+            source=emitted.source,
+            target=emitted.target,
+            measurement=emitted.measurement,
+            inliers=int(emitted.metrics["ransac_inliers"]),
+            inlier_ratio=float(emitted.metrics["ransac_ratio"]),
+            translation_sigma_m=self.sparse_translation_sigma,
+            rotation_sigma_deg=self.sparse_rotation_sigma_deg,
+        )
+        key = (factor.a, factor.b, factor.kind)
+        if key in self.pose_factors:
+            return False
+        self.pose_factors[key] = factor
+        self.pose_graph_version += 1
+        self.existing_loop_pairs.add((factor.a, factor.b))
+        eigenvalues = torch.linalg.eigvalsh(factor.information)
+        self.loop_records.append({
+            "source": factor.a,
+            "target": factor.b,
+            "gap": factor.b - factor.a,
+            "status": "accepted_sparse",
+            "hypothesis_id": update.hypothesis_id,
+            "supports": next(
+                len(item.supports)
+                for item in self.hypothesis_tracker.hypotheses
+                if item.hypothesis_id == update.hypothesis_id
+            ),
+            "observations": factor.observation_count,
+            "confidence": factor.confidence,
+            "information_eigenvalues": eigenvalues.tolist(),
+        })
+        self.pose_backend.submit(self._pose_graph_snapshot())
+        return True
+
     def _process_one_loop_candidate(self, current_frame_id):
         if (
             not self.loop_candidates
@@ -265,6 +428,35 @@ class OnlineLoopWindowMACVO(WindowMACVO):
         source = self.loop_keyframes.load(candidate.source)
         source.stereo.imageL = source.stereo.imageL.to(target.stereo.imageL)
         source.stereo.imageR = source.stereo.imageR.to(target.stereo.imageR)
+        if self.validation_mode == "sparse_se3":
+            validation = self._validate_sparse_candidate(
+                source, target, candidate
+            )
+            self.last_loop_match_frame = current_frame_id
+            self.pending_targets.pop(target_id)
+            if validation.reason is not None:
+                self.rejected_loop_pairs.add(pair)
+                self.loop_records.append({
+                    "source": candidate.source,
+                    "target": target_id,
+                    "bow_score": candidate.score,
+                    "status": "rejected_sparse",
+                    "reason": validation.reason,
+                    "metrics": validation.metrics,
+                })
+                return False
+            accepted = self._register_sparse_support(candidate, validation)
+            if not accepted:
+                latest = self.hypothesis_records[-1]
+                self.loop_records.append({
+                    "source": candidate.source,
+                    "target": target_id,
+                    "bow_score": candidate.score,
+                    "status": latest["state"],
+                    "hypothesis_id": latest["hypothesis_id"],
+                    "metrics": validation.metrics,
+                })
+            return accepted
         source_depth, forward, backward = self.Frontend.estimate_bidirectional(
             source.stereo, target.stereo
         )

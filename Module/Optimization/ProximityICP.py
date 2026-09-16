@@ -389,7 +389,7 @@ def generate_proximity_archive(
             if int(frame.stereo.frame_ns) != int(source_archive.time_ns[frame_id]):
                 raise ValueError(f"sequence timestamp mismatch at frame {frame_id}")
         try:
-            target_depth, forward, backward = frontend.estimate_bidirectional(
+            _, forward, backward = frontend.estimate_bidirectional(
                 source_frame.stereo, target_frame.stereo
             )
             frontend_calls += 1
@@ -410,7 +410,9 @@ def generate_proximity_archive(
             source_depth=depth_output_to_device(
                 cache.depth_output(selected.source), device
             ),
-            target_depth=target_depth,
+            target_depth=depth_output_to_device(
+                cache.depth_output(selected.target), device
+            ),
             poses=source_archive.initial_sensor_poses,
             frontend=frontend,
             keypoint_selector=keypoint_selector,
