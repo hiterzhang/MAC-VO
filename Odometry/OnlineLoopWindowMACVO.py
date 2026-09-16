@@ -106,6 +106,13 @@ class OnlineLoopWindowMACVO(WindowMACVO):
             or self.loop_information_scale <= 0
         ):
             raise ValueError("loop information scale must be positive")
+        if (
+            self.validation_mode != "sparse_se3"
+            and self.loop_information_scale != 1.0
+        ):
+            raise ValueError(
+                "non-unit loop information scale requires sparse_se3 mode"
+            )
         self.compress_edge = compress_edge_to_pose_factor
         self.linearize_edge = linearize_edge_to_pose_factor
         self.pose_factors = {}
@@ -127,14 +134,7 @@ class OnlineLoopWindowMACVO(WindowMACVO):
         self.pending_targets = None
         self.loop_provider = None
         self.pose_backend = AsyncPoseGraphBackend(
-            solver=lambda poses, factors: optimize_pose_graph(
-                poses,
-                factors,
-                max_iters=self.pose_graph_iterations,
-                huber_delta=self.pose_graph_huber_delta,
-                skip_information_cap=self.skip_information_cap,
-                switch_prior=self._effective_switch_prior(),
-            )
+            solver=self._solve_pose_graph
         )
         sparse_geometry = getattr(online_loop, "sparse_geometry", None)
         hypothesis = getattr(online_loop, "hypothesis", None)
@@ -160,6 +160,16 @@ class OnlineLoopWindowMACVO(WindowMACVO):
     def _effective_switch_prior(self):
         return self.switch_prior * self.loop_information_scale
 
+    def _solve_pose_graph(self, poses, factors):
+        return optimize_pose_graph(
+            poses,
+            factors,
+            max_iters=self.pose_graph_iterations,
+            huber_delta=self.pose_graph_huber_delta,
+            skip_information_cap=self.skip_information_cap,
+            switch_prior=self._effective_switch_prior(),
+        )
+
     @classmethod
     def is_valid_config(cls, config):
         assert config is not None
@@ -174,6 +184,18 @@ class OnlineLoopWindowMACVO(WindowMACVO):
         for name in ("online_loop", "pairwise_icp", "pose_graph"):
             if not hasattr(config.args, name):
                 raise ValueError(f"Online loop config is missing {name}")
+        scale = float(getattr(
+            config.args.pose_graph, "loop_information_scale", 1.0
+        ))
+        if not math.isfinite(scale) or scale <= 0:
+            raise ValueError("loop information scale must be positive")
+        validation_mode = str(getattr(
+            config.args.online_loop, "validation_mode", "legacy_dense"
+        ))
+        if validation_mode != "sparse_se3" and scale != 1.0:
+            raise ValueError(
+                "non-unit loop information scale requires sparse_se3 mode"
+            )
 
     def _wrap_frontend_once(self):
         if not isinstance(self.Frontend, SerializedFrontend):

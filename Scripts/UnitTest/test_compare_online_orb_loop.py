@@ -13,6 +13,7 @@ from Scripts.Experiment.CompareOnlineORBLoop import (
     write_rows,
 )
 from Utility.Config import load_config
+from Odometry.OnlineLoopWindowMACVO import OnlineLoopWindowMACVO
 
 
 class CompareOnlineORBLoopTests(unittest.TestCase):
@@ -97,6 +98,28 @@ class CompareOnlineORBLoopTests(unittest.TestCase):
             10000.0,
         )
         self.assertTrue(uses_online_diagnostics("window_orb_loop_sparse"))
+
+    def test_legacy_mode_defaults_to_unit_loop_scale(self):
+        cfg, _ = load_config(MODE_CONFIGS["window_orb_loop"])
+
+        self.assertEqual(
+            getattr(cfg.Odometry.args.pose_graph, "loop_information_scale", 1.0),
+            1.0,
+        )
+
+    def test_invalid_loop_information_scale_is_rejected(self):
+        cfg, _ = load_config(MODE_CONFIGS["window_orb_loop_sparse"])
+        for value in (0.0, -1.0, float("nan"), float("inf")):
+            cfg.Odometry.args.pose_graph.loop_information_scale = value
+            with self.assertRaisesRegex(ValueError, "information scale"):
+                OnlineLoopWindowMACVO.is_valid_config(cfg.Odometry)
+
+    def test_legacy_mode_rejects_nonunit_explicit_loop_scale(self):
+        cfg, _ = load_config(MODE_CONFIGS["window_orb_loop"])
+        cfg.Odometry.args.pose_graph.loop_information_scale = 10000.0
+
+        with self.assertRaisesRegex(ValueError, "sparse_se3"):
+            OnlineLoopWindowMACVO.is_valid_config(cfg.Odometry)
 
     def test_sparse_loop_summary_reports_states_and_quality(self):
         diagnostics = {

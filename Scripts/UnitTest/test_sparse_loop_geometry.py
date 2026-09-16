@@ -260,6 +260,13 @@ class SparseLoopValidationTests(unittest.TestCase):
         self.assertAlmostEqual(
             float(factor.information[3, 3]), expected_rotation, places=3
         )
+        expected = torch.tensor(
+            [160000.0] * 3 + [expected_rotation] * 3,
+            dtype=torch.float64,
+        )
+        self.assertTrue(torch.allclose(
+            torch.linalg.eigvalsh(factor.information), expected
+        ))
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
     def test_cuda_depth_maps_accept_cpu_orb_matches(self):

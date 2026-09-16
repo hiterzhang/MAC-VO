@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import numpy as np
 import pypose as pp
@@ -403,6 +403,30 @@ class OnlineLoopWindowMACVOTests(unittest.TestCase):
         system.loop_information_scale = 10000.0
 
         self.assertEqual(system._effective_switch_prior(), 10000.0)
+
+    def test_pose_graph_solver_receives_effective_switch_prior(self):
+        system = OnlineLoopWindowMACVO.__new__(OnlineLoopWindowMACVO)
+        system.pose_graph_iterations = 10
+        system.pose_graph_huber_delta = 3.0
+        system.skip_information_cap = 0.5
+        system.switch_prior = 1.0
+        system.loop_information_scale = 10000.0
+
+        with patch(
+            "Odometry.OnlineLoopWindowMACVO.optimize_pose_graph",
+            return_value="solved",
+        ) as solve:
+            result = system._solve_pose_graph("poses", "factors")
+
+        self.assertEqual(result, "solved")
+        solve.assert_called_once_with(
+            "poses",
+            "factors",
+            max_iters=10,
+            huber_delta=3.0,
+            skip_information_cap=0.5,
+            switch_prior=10000.0,
+        )
 
 
 if __name__ == "__main__":
