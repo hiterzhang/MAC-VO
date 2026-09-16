@@ -3,7 +3,14 @@ import unittest
 import pypose as pp
 import torch
 
-from Module.LoopClosure.SparseGeometry import estimate_se3_ransac
+from DataLoader import StereoData
+from Module.Frontend.StereoDepth import IStereoDepth
+from Module.LoopClosure.SparseGeometry import (
+    SparseGeometryConfig,
+    conservative_sparse_factor,
+    estimate_se3_ransac,
+    validate_sparse_loop,
+)
 
 
 def synthetic_problem(seed=4, outliers=40):
@@ -102,6 +109,138 @@ class SparseSE3RansacTests(unittest.TestCase):
 
         self.assertIsNone(result.measurement)
         self.assertEqual(result.reason, "invalid_covariance")
+
+
+class IdentityCovariance:
+    def estimate(self, frame, pixels, depth, depth_cov, pixel_cov):
+        return torch.eye(3, device=pixels.device)[None].repeat(len(pixels), 1, 1) * 1e-4
+
+
+def stereo_data(height=48, width=64):
+    K = torch.tensor(
+        [[[50.0, 0.0, width / 2], [0.0, 50.0, height / 2], [0.0, 0.0, 1.0]]]
+    )
+    return StereoData(
+        T_BS=pp.identity_SE3(1),
+        K=K,
+        baseline=torch.tensor([0.2]),
+        time_ns=[0],
+        height=height,
+        width=width,
+        imageL=torch.zeros(1, 3, height, width),
+        imageR=torch.zeros(1, 3, height, width),
+    )
+
+
+def depth_output(height=48, width=64, value=5.0):
+    depth = torch.full((1, 1, height, width), value)
+    covariance = torch.full_like(depth, 1e-4)
+    return IStereoDepth.Output(depth=depth, cov=covariance)
+
+
+def covered_matches():
+    values = []
+    for y in (8, 16, 24, 32, 40):
+        for x in (8, 16, 24, 32, 40, 48, 56):
+            values.append([x, y, x, y, 4])
+    return torch.tensor(values, dtype=torch.float64).numpy()
+
+
+class SparseLoopValidationTests(unittest.TestCase):
+    def config(self, **overrides):
+        values = dict(
+            min_mutual_matches=20,
+            min_valid_3d=20,
+            min_ransac_inliers=20,
+            min_ransac_ratio=0.5,
+            grid_rows=4,
+            grid_cols=6,
+            min_grid_cells=6,
+            ransac_iterations=64,
+            mahalanobis_threshold=3.5,
+            max_median_reprojection_px=1.0,
+            max_p90_reprojection_px=2.0,
+            min_geometry_ratio=1e-3,
+            orb_pixel_variance=2.25,
+        )
+        values.update(overrides)
+        return SparseGeometryConfig(**values)
+
+    def test_validates_identity_loop_from_depth_and_pixels(self):
+        result = validate_sparse_loop(
+            source=10,
+            target=100,
+            matches=covered_matches(),
+            source_stereo=stereo_data(),
+            target_stereo=stereo_data(),
+            source_depth=depth_output(),
+            target_depth=depth_output(),
+            covariance_model=IdentityCovariance(),
+            config=self.config(),
+            seed=7,
+        )
+
+        self.assertIsNone(result.reason)
+        self.assertIsNotNone(result.measurement)
+        self.assertGreaterEqual(result.metrics["ransac_inliers"], 20)
+        self.assertLess(result.metrics["reprojection_forward_median_px"], 1e-6)
+
+    def test_rejects_invalid_depth(self):
+        invalid = depth_output(value=0.0)
+
+        result = validate_sparse_loop(
+            source=10,
+            target=100,
+            matches=covered_matches(),
+            source_stereo=stereo_data(),
+            target_stereo=stereo_data(),
+            source_depth=invalid,
+            target_depth=invalid,
+            covariance_model=IdentityCovariance(),
+            config=self.config(),
+            seed=7,
+        )
+
+        self.assertEqual(result.reason, "insufficient_valid_depth")
+
+    def test_rejects_weak_image_coverage(self):
+        matches = covered_matches()
+        matches[:, :4] = torch.tensor([8.0, 8.0, 8.0, 8.0]).numpy()
+
+        result = validate_sparse_loop(
+            source=10,
+            target=100,
+            matches=matches,
+            source_stereo=stereo_data(),
+            target_stereo=stereo_data(),
+            source_depth=depth_output(),
+            target_depth=depth_output(),
+            covariance_model=IdentityCovariance(),
+            config=self.config(),
+            seed=7,
+        )
+
+        self.assertEqual(result.reason, "insufficient_grid_coverage")
+
+    def test_builds_conservative_sparse_factor(self):
+        measurement = pp.identity_SE3(dtype=torch.float64).tensor()
+
+        factor = conservative_sparse_factor(
+            source=10,
+            target=100,
+            measurement=measurement,
+            inliers=60,
+            inlier_ratio=0.6,
+            translation_sigma_m=0.25,
+            rotation_sigma_deg=10.0,
+        )
+
+        self.assertEqual(factor.kind, "loop")
+        self.assertEqual(factor.observation_count, 60)
+        self.assertAlmostEqual(factor.confidence, 0.6)
+        self.assertAlmostEqual(float(factor.information[0, 0]), 16.0)
+        expected_rotation = 1 / float(torch.deg2rad(torch.tensor(10.0))) ** 2
+        self.assertAlmostEqual(float(factor.information[3, 3]), expected_rotation, places=4)
 
 
 if __name__ == "__main__":
