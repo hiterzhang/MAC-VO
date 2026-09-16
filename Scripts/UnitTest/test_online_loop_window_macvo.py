@@ -199,6 +199,7 @@ class OnlineLoopWindowMACVOTests(unittest.TestCase):
         system.sparse_factor_builder = conservative_sparse_factor
         system.sparse_translation_sigma = 0.25
         system.sparse_rotation_sigma_deg = 10.0
+        system.loop_information_scale = 10000.0
         system.pose_factors = {}
         system.pose_graph_version = 0
         system.existing_loop_pairs = set()
@@ -222,7 +223,7 @@ class OnlineLoopWindowMACVOTests(unittest.TestCase):
         self.assertEqual(len(system.pose_factors), 1)
         stored = next(iter(system.pose_factors.values()))
         self.assertEqual((stored.a, stored.b, stored.kind), (10, 20, "loop"))
-        self.assertAlmostEqual(float(stored.information[0, 0]), 16.0)
+        self.assertAlmostEqual(float(stored.information[0, 0]), 160000.0)
         system.compress_edge.assert_not_called()
         system.pose_backend.submit.assert_called_once_with("snapshot")
         accepted = next(
@@ -243,6 +244,7 @@ class OnlineLoopWindowMACVOTests(unittest.TestCase):
         system.sparse_factor_builder = Mock(side_effect=RuntimeError("factor failed"))
         system.sparse_translation_sigma = 0.25
         system.sparse_rotation_sigma_deg = 10.0
+        system.loop_information_scale = 1.0
         system.pose_factors = {}
         system.pose_graph_version = 0
         system.existing_loop_pairs = set()
@@ -382,6 +384,8 @@ class OnlineLoopWindowMACVOTests(unittest.TestCase):
         )
         system.sparse_translation_sigma = 0.25
         system.sparse_rotation_sigma_deg = 10.0
+        system.loop_information_scale = 10000.0
+        system.switch_prior = 1.0
 
         payload = system._online_loop_diagnostics((factor(0, 1, "loop"),))
 
@@ -389,6 +393,16 @@ class OnlineLoopWindowMACVOTests(unittest.TestCase):
         self.assertEqual(payload["protocol_version"], 2)
         self.assertEqual(payload["sparse_geometry"]["min_ransac_inliers"], 25)
         self.assertEqual(payload["hypothesis_records"], [{"state": "confirmed"}])
+        self.assertEqual(payload["loop_information_scale"], 10000.0)
+        self.assertEqual(payload["switch_prior_base"], 1.0)
+        self.assertEqual(payload["switch_prior_effective"], 10000.0)
+
+    def test_effective_switch_prior_scales_with_loop_information(self):
+        system = OnlineLoopWindowMACVO.__new__(OnlineLoopWindowMACVO)
+        system.switch_prior = 1.0
+        system.loop_information_scale = 10000.0
+
+        self.assertEqual(system._effective_switch_prior(), 10000.0)
 
 
 if __name__ == "__main__":

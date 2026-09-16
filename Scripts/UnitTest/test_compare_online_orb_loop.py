@@ -92,6 +92,10 @@ class CompareOnlineORBLoopTests(unittest.TestCase):
             config["Odometry"]["args"]["online_loop"]["validation_mode"],
             "sparse_se3",
         )
+        self.assertEqual(
+            config["Odometry"]["args"]["pose_graph"]["loop_information_scale"],
+            10000.0,
+        )
         self.assertTrue(uses_online_diagnostics("window_orb_loop_sparse"))
 
     def test_sparse_loop_summary_reports_states_and_quality(self):

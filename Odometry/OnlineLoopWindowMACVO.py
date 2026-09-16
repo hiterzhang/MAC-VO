@@ -4,6 +4,7 @@ from collections import Counter, deque
 import copy
 from dataclasses import asdict, replace
 import json
+import math
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -97,6 +98,14 @@ class OnlineLoopWindowMACVO(WindowMACVO):
         self.pose_graph_huber_delta = float(pose_graph.huber_delta)
         self.skip_information_cap = float(pose_graph.skip_information_cap)
         self.switch_prior = float(pose_graph.switch_prior)
+        self.loop_information_scale = float(
+            getattr(pose_graph, "loop_information_scale", 1.0)
+        )
+        if (
+            not math.isfinite(self.loop_information_scale)
+            or self.loop_information_scale <= 0
+        ):
+            raise ValueError("loop information scale must be positive")
         self.compress_edge = compress_edge_to_pose_factor
         self.linearize_edge = linearize_edge_to_pose_factor
         self.pose_factors = {}
@@ -124,7 +133,7 @@ class OnlineLoopWindowMACVO(WindowMACVO):
                 max_iters=self.pose_graph_iterations,
                 huber_delta=self.pose_graph_huber_delta,
                 skip_information_cap=self.skip_information_cap,
-                switch_prior=self.switch_prior,
+                switch_prior=self._effective_switch_prior(),
             )
         )
         sparse_geometry = getattr(online_loop, "sparse_geometry", None)
@@ -147,6 +156,9 @@ class OnlineLoopWindowMACVO(WindowMACVO):
         self.sparse_validator = validate_sparse_loop
         self.sparse_factor_builder = conservative_sparse_factor
         self._wrap_frontend_once()
+
+    def _effective_switch_prior(self):
+        return self.switch_prior * self.loop_information_scale
 
     @classmethod
     def is_valid_config(cls, config):
@@ -416,6 +428,7 @@ class OnlineLoopWindowMACVO(WindowMACVO):
             inlier_ratio=float(emitted.metrics["ransac_ratio"]),
             translation_sigma_m=self.sparse_translation_sigma,
             rotation_sigma_deg=self.sparse_rotation_sigma_deg,
+            information_scale=getattr(self, "loop_information_scale", 1.0),
         )
         key = (factor.a, factor.b, factor.kind)
         if key in self.pose_factors:
@@ -715,6 +728,14 @@ class OnlineLoopWindowMACVO(WindowMACVO):
         return {
             "loop_enabled": self.loop_enabled,
             "validation_mode": getattr(self, "validation_mode", "legacy_dense"),
+            "loop_information_scale": getattr(
+                self, "loop_information_scale", 1.0
+            ),
+            "switch_prior_base": getattr(self, "switch_prior", 1.0),
+            "switch_prior_effective": (
+                self._effective_switch_prior()
+                if hasattr(self, "switch_prior") else 1.0
+            ),
             "provider": None if self.loop_provider is None else self.loop_provider.status,
             "protocol_version": (
                 None if self.loop_provider is None

@@ -66,6 +66,7 @@ Odometry:
       huber_delta: 3.0
       skip_information_cap: 0.5
       switch_prior: 1.0
+      loop_information_scale: 10000.0
   cov:
     obs:
       type: MatchCovariance
