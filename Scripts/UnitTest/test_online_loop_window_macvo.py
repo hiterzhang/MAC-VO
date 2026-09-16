@@ -43,22 +43,24 @@ def factor(a=0, b=1, kind="adjacent"):
     )
 
 
-def sparse_candidate(source, target, count=50):
+def sparse_candidate(source, target, count=50, score=0.2, rank=0):
     matches = np.zeros((count, 5), dtype=np.float64)
     matches[:, 0] = np.linspace(10, 50, count)
     matches[:, 1] = np.linspace(10, 40, count)
     matches[:, 2:4] = matches[:, :2]
     return ORBLoopCandidate(
         source=source,
-        score=0.2,
-        rank=0,
+        score=score,
+        rank=rank,
         raw_knn_matches=count + 20,
         ratio_matches=count + 10,
         matches=matches,
     )
 
 
-def sparse_validation(source, target, translation=0.0):
+def sparse_validation(
+    source, target, translation=0.0, inliers=40, inlier_ratio=0.8
+):
     measurement = pp.se3(torch.tensor(
         [translation, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=torch.float64
     )).Exp().tensor()
@@ -66,10 +68,10 @@ def sparse_validation(source, target, translation=0.0):
         source=source,
         target=target,
         measurement=measurement,
-        inlier_mask=torch.ones(40, dtype=torch.bool),
+        inlier_mask=torch.ones(inliers, dtype=torch.bool),
         metrics={
-            "ransac_inliers": 40,
-            "ransac_ratio": 0.8,
+            "ransac_inliers": inliers,
+            "ransac_ratio": inlier_ratio,
             "final_grid_cells": 10,
             "reprojection_forward_p90_px": 1.0,
             "reprojection_backward_p90_px": 1.0,
@@ -207,10 +209,12 @@ class OnlineLoopWindowMACVOTests(unittest.TestCase):
         system.compress_edge = Mock()
 
         first = system._register_sparse_support(
-            sparse_candidate(10, 20), sparse_validation(10, 20)
+            sparse_candidate(10, 20, score=0.4, rank=1),
+            sparse_validation(10, 20, inliers=50, inlier_ratio=0.9),
         )
         second = system._register_sparse_support(
-            sparse_candidate(15, 25), sparse_validation(15, 25)
+            sparse_candidate(15, 25, score=0.2, rank=0),
+            sparse_validation(15, 25, inliers=40, inlier_ratio=0.8),
         )
 
         self.assertFalse(first)
@@ -225,9 +229,74 @@ class OnlineLoopWindowMACVOTests(unittest.TestCase):
             item for item in system.loop_records
             if item["status"] == "accepted_sparse"
         )
-        self.assertEqual(accepted["bow_score"], 0.2)
-        self.assertEqual(accepted["metrics"]["ransac_inliers"], 40)
+        self.assertEqual(accepted["bow_score"], 0.4)
+        self.assertEqual(accepted["rank"], 1)
+        self.assertEqual(accepted["metrics"]["ransac_inliers"], 50)
         self.assertEqual(len(accepted["measurement_se3"]), 7)
+
+    def test_sparse_factor_failure_rolls_back_hypothesis_emission(self):
+        system = OnlineLoopWindowMACVO.__new__(OnlineLoopWindowMACVO)
+        system.graph = SimpleNamespace(frames=SimpleNamespace(data={
+            "pose": SimpleNamespace(tensor=pp.identity_SE3(30).tensor())
+        }))
+        system.hypothesis_tracker = LoopHypothesisTracker(HypothesisConfig())
+        system.sparse_factor_builder = Mock(side_effect=RuntimeError("factor failed"))
+        system.sparse_translation_sigma = 0.25
+        system.sparse_rotation_sigma_deg = 10.0
+        system.pose_factors = {}
+        system.pose_graph_version = 0
+        system.existing_loop_pairs = set()
+        system.hypothesis_records = []
+        system.loop_records = []
+        system.pose_backend = SimpleNamespace(submit=Mock())
+        system._pose_graph_snapshot = Mock(return_value="snapshot")
+        system._register_sparse_support(
+            sparse_candidate(10, 20), sparse_validation(10, 20)
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "factor failed"):
+            system._register_sparse_support(
+                sparse_candidate(15, 25), sparse_validation(15, 25)
+            )
+
+        hypothesis = system.hypothesis_tracker.hypotheses[0]
+        self.assertEqual(len(hypothesis.supports), 1)
+        self.assertFalse(hypothesis.emitted)
+        self.assertEqual(system.pose_factors, {})
+        self.assertEqual(system.pose_graph_version, 0)
+
+    def test_sparse_registration_exception_is_recorded_and_continues(self):
+        system = OnlineLoopWindowMACVO.__new__(OnlineLoopWindowMACVO)
+        candidate = sparse_candidate(0, 50)
+        system.loop_candidates = __import__("collections").deque([(50, candidate)])
+        system.last_loop_match_frame = -10**9
+        system.min_frames_between_loop_matches = 0
+        system.pending_loop_pairs = {(0, 50)}
+        target = SimpleNamespace(frame_id=50, stereo=SimpleNamespace())
+        system.pending_targets = SimpleNamespace(get=lambda _: target, pop=Mock())
+        source = SimpleNamespace(stereo=SimpleNamespace(
+            imageL=torch.zeros(1), imageR=torch.zeros(1)
+        ))
+        target.stereo.imageL = torch.zeros(1)
+        target.stereo.imageR = torch.zeros(1)
+        system.loop_keyframes = SimpleNamespace(
+            records={0: object()}, load=Mock(return_value=source)
+        )
+        system.rejected_loop_pairs = set()
+        system.loop_records = []
+        system.validation_mode = "sparse_se3"
+        system._validate_sparse_candidate = Mock(
+            return_value=sparse_validation(0, 50)
+        )
+        system._register_sparse_support = Mock(
+            side_effect=RuntimeError("registration failed")
+        )
+
+        result = system._process_one_loop_candidate(50)
+
+        self.assertFalse(result)
+        self.assertEqual(system.loop_records[-1]["status"], "validation_failed")
+        self.assertIn("registration failed", system.loop_records[-1]["reason"])
 
     def test_sparse_validation_exception_does_not_stop_odometry(self):
         system = OnlineLoopWindowMACVO.__new__(OnlineLoopWindowMACVO)

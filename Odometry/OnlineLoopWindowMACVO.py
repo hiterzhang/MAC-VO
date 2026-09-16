@@ -1,6 +1,7 @@
 """WindowICP with asynchronous ORB retrieval and serialized online loop closure."""
 
 from collections import Counter, deque
+import copy
 from dataclasses import asdict, replace
 import json
 from pathlib import Path
@@ -346,6 +347,24 @@ class OnlineLoopWindowMACVO(WindowMACVO):
         return result
 
     def _register_sparse_support(self, candidate, validation):
+        tracker_before = copy.deepcopy(self.hypothesis_tracker)
+        hypothesis_record_count = len(self.hypothesis_records)
+        loop_record_count = len(self.loop_records)
+        factors_before = dict(self.pose_factors)
+        existing_before = set(self.existing_loop_pairs)
+        graph_version_before = self.pose_graph_version
+        try:
+            return self._register_sparse_support_unchecked(candidate, validation)
+        except Exception:
+            self.hypothesis_tracker = tracker_before
+            del self.hypothesis_records[hypothesis_record_count:]
+            del self.loop_records[loop_record_count:]
+            self.pose_factors = factors_before
+            self.existing_loop_pairs = existing_before
+            self.pose_graph_version = graph_version_before
+            raise
+
+    def _register_sparse_support_unchecked(self, candidate, validation):
         poses = pp.SE3(self.graph.frames.data["pose"].tensor.double())
         measurement = pp.SE3(validation.measurement)
         correction = (
@@ -418,8 +437,8 @@ class OnlineLoopWindowMACVO(WindowMACVO):
             ),
             "observations": factor.observation_count,
             "confidence": factor.confidence,
-            "bow_score": float(candidate.score),
-            "rank": int(candidate.rank),
+            "bow_score": float(emitted.metrics["bow_score"]),
+            "rank": int(emitted.metrics["rank"]),
             "metrics": emitted.metrics,
             "measurement_se3": emitted.measurement.tolist(),
             "information_eigenvalues": eigenvalues.tolist(),
@@ -493,17 +512,32 @@ class OnlineLoopWindowMACVO(WindowMACVO):
                     "metrics": validation.metrics,
                 })
                 return False
-            accepted = self._register_sparse_support(candidate, validation)
-            if not accepted:
-                latest = self.hypothesis_records[-1]
+            try:
+                accepted = self._register_sparse_support(candidate, validation)
+            except Exception as error:
+                self.rejected_loop_pairs.add(pair)
                 self.loop_records.append({
                     "source": candidate.source,
                     "target": target_id,
                     "bow_score": candidate.score,
-                    "status": latest["state"],
-                    "hypothesis_id": latest["hypothesis_id"],
+                    "rank": candidate.rank,
+                    "status": "validation_failed",
+                    "reason": str(error),
                     "metrics": validation.metrics,
+                    "measurement_se3": validation.measurement.tolist(),
                 })
+                return False
+            latest = self.hypothesis_records[-1]
+            self.loop_records.append({
+                "source": candidate.source,
+                "target": target_id,
+                "bow_score": candidate.score,
+                "rank": candidate.rank,
+                "status": latest["state"],
+                "hypothesis_id": latest["hypothesis_id"],
+                "metrics": validation.metrics,
+                "measurement_se3": validation.measurement.tolist(),
+            })
             return accepted
         source_depth, forward, backward = self.Frontend.estimate_bidirectional(
             source.stereo, target.stereo
