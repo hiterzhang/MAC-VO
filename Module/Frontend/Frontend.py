@@ -111,10 +111,15 @@ class IFrontend(ABC, ConfigTestableSubclass):
         source: StereoData,
         target: StereoData,
     ) -> tuple[IStereoDepth.Output, IMatcher.Output, IMatcher.Output]:
-        """Estimate target depth plus source->target and target->source matches."""
-        depth, forward = self.estimate_pair(source, target)
+        """Estimate source depth plus source->target and target->source matches."""
+        depth = self.estimate_depth(source)
+        _, forward = self.estimate_pair(source, target)
         _, backward = self.estimate_pair(target, source)
         return depth, forward, backward
+
+    def estimate_loop_depth(self, source: StereoData) -> IStereoDepth.Output:
+        """Estimate historical source depth for sparse loop verification."""
+        return self.estimate_depth(source)
 
     @overload
     @staticmethod
@@ -196,19 +201,30 @@ def build_bidirectional_inputs(
     source: StereoData,
     target: StereoData,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Build target stereo, forward-flow, and backward-flow batch slots."""
+    """Build source stereo, forward-flow, and backward-flow batch slots."""
     validate_fused_inputs({
-        "target.imageL": target.imageL,
-        "target.imageR": target.imageR,
         "source.imageL": source.imageL,
-    }, target.imageL)
+        "source.imageR": source.imageR,
+        "target.imageL": target.imageL,
+    }, source.imageL)
     input_a = torch.cat(
-        [target.imageL, source.imageL, target.imageL], dim=0
+        [source.imageL, source.imageL, target.imageL], dim=0
     )
     input_b = torch.cat(
-        [target.imageR, target.imageL, source.imageL], dim=0
+        [source.imageR, target.imageL, source.imageL], dim=0
     )
     return input_a, input_b
+
+
+def build_loop_depth_inputs(
+    source: StereoData,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Build a fixed batch of three identical source stereo pairs."""
+    validate_fused_inputs({
+        "source.imageL": source.imageL,
+        "source.imageR": source.imageR,
+    }, source.imageL)
+    return source.imageL.repeat(3, 1, 1, 1), source.imageR.repeat(3, 1, 1, 1)
 
 # Implementations
 
@@ -435,11 +451,30 @@ class CUDAGraph_FlowFormerCovFrontend(FlowFormerCovFrontend):
             self.inference_2_depth(
                 est_flow[0:1],
                 est_cov[0:1],
-                target,
+                source,
                 self.config.enforce_positive_disparity,
             ),
             self.inference_2_match(est_flow[1:2], est_cov[1:2]),
             self.inference_2_match(est_flow[2:3], est_cov[2:3]),
+        )
+
+    @Timer.cpu_timeit("Frontend.estimate")
+    @Timer.gpu_timeit("Frontend.estimate")
+    @torch.inference_mode()
+    def estimate_loop_depth(
+        self,
+        source: StereoData,
+    ) -> IStereoDepth.Output:
+        input_a, input_b = build_loop_depth_inputs(source)
+        est_flow, est_cov = self.cuda_graph_estimate(
+            input_a.to(device=self.config.device),
+            input_b.to(device=self.config.device),
+        )
+        return self.inference_2_depth(
+            est_flow[0:1].float(),
+            est_cov[0:1].float(),
+            source,
+            self.config.enforce_positive_disparity,
         )
     
     def cuda_graph_estimate(self, inp_A: torch.Tensor, inp_B: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

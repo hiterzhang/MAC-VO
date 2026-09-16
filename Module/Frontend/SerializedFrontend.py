@@ -98,3 +98,7 @@ class SerializedFrontend:
     def estimate_bidirectional(self, *args, **kwargs):
         with self._call_slot("loop"):
             return self.frontend.estimate_bidirectional(*args, **kwargs)
+
+    def estimate_loop_depth(self, *args, **kwargs):
+        with self._call_slot("loop"):
+            return self.frontend.estimate_loop_depth(*args, **kwargs)

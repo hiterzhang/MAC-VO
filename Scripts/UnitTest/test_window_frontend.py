@@ -9,6 +9,7 @@ from Module.Frontend.Frontend import (
     CUDAGraph_FlowFormerCovFrontend,
     IFrontend,
     build_bidirectional_inputs,
+    build_loop_depth_inputs,
     build_window_inputs,
 )
 
@@ -30,13 +31,19 @@ def stereo(left: float, right: float) -> StereoData:
 
 
 class FusedWindowFrontendTests(unittest.TestCase):
-    def test_builds_target_stereo_forward_and_backward_slots(self):
+    def test_builds_source_stereo_forward_and_backward_slots(self):
         input_a, input_b = build_bidirectional_inputs(
             stereo(2, 20), stereo(0, 30)
         )
 
-        self.assertEqual(input_a[:, 0, 0, 0].tolist(), [0.0, 2.0, 0.0])
-        self.assertEqual(input_b[:, 0, 0, 0].tolist(), [30.0, 0.0, 2.0])
+        self.assertEqual(input_a[:, 0, 0, 0].tolist(), [2.0, 2.0, 0.0])
+        self.assertEqual(input_b[:, 0, 0, 0].tolist(), [20.0, 0.0, 2.0])
+
+    def test_builds_sparse_loop_depth_slots_from_source_stereo(self):
+        input_a, input_b = build_loop_depth_inputs(stereo(2, 20))
+
+        self.assertEqual(input_a[:, 0, 0, 0].tolist(), [2.0, 2.0, 2.0])
+        self.assertEqual(input_b[:, 0, 0, 0].tolist(), [20.0, 20.0, 20.0])
 
     def test_bidirectional_inputs_reject_mismatched_shape(self):
         source = stereo(2, 20)
@@ -67,6 +74,31 @@ class FusedWindowFrontendTests(unittest.TestCase):
         self.assertTrue(torch.allclose(depth.depth, torch.ones_like(depth.depth)))
         self.assertTrue(torch.equal(forward.flow, flow[1:2]))
         self.assertTrue(torch.equal(backward.flow, flow[2:3]))
+
+    def test_cuda_frontend_sparse_loop_depth_uses_source_stereo(self):
+        frontend = CUDAGraph_FlowFormerCovFrontend.__new__(
+            CUDAGraph_FlowFormerCovFrontend
+        )
+        frontend.config = SimpleNamespace(
+            device="cpu", enforce_positive_disparity=False
+        )
+        captured = {}
+        flow = torch.zeros(3, 2, 2, 2)
+        covariance = torch.ones(3, 2, 2, 2)
+        flow[:, 0] = 2
+
+        def estimate(input_a, input_b):
+            captured["a"] = input_a.clone()
+            captured["b"] = input_b.clone()
+            return flow, covariance
+
+        frontend.cuda_graph_estimate = estimate
+
+        depth = frontend.estimate_loop_depth(stereo(2, 20))
+
+        self.assertEqual(captured["a"][:, 0, 0, 0].tolist(), [2.0, 2.0, 2.0])
+        self.assertEqual(captured["b"][:, 0, 0, 0].tolist(), [20.0, 20.0, 20.0])
+        self.assertTrue(torch.allclose(depth.depth, torch.ones_like(depth.depth)))
 
     def test_rejects_non_single_frame_inputs_before_graph_capture(self):
         prev1 = stereo(1, 10)

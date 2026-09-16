@@ -43,6 +43,9 @@ class FakeFrontend:
     def estimate_bidirectional(self, *args):
         return self._call(args[0])
 
+    def estimate_loop_depth(self, *args):
+        return self._call(args[0])
+
 
 class SerializedFrontendTests(unittest.TestCase):
     def test_forced_contention_never_runs_two_frontend_calls(self):
@@ -101,6 +104,16 @@ class SerializedFrontendTests(unittest.TestCase):
         self.assertEqual(wrapper.model_identity, id(frontend.model))
         self.assertEqual(wrapper.graph_identity, id(frontend.cuda_graph))
         self.assertEqual(wrapper.diagnostics["tracking_calls"], 1)
+        self.assertEqual(wrapper.diagnostics["loop_calls"], 1)
+
+    def test_sparse_loop_depth_is_serialized_as_loop_work(self):
+        frontend = FakeFrontend()
+        wrapper = SerializedFrontend(frontend)
+
+        result = wrapper.estimate_loop_depth("sparse-depth")
+
+        self.assertEqual(result, "sparse-depth")
+        self.assertEqual(wrapper.diagnostics["tracking_calls"], 0)
         self.assertEqual(wrapper.diagnostics["loop_calls"], 1)
 
 
