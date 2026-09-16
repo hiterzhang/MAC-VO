@@ -497,11 +497,14 @@ def conservative_sparse_factor(
     *,
     translation_sigma_m,
     rotation_sigma_deg,
+    information_scale=1.0,
 ):
     if translation_sigma_m <= 0 or rotation_sigma_deg <= 0:
         raise ValueError("sparse factor sigmas must be positive")
+    if not math.isfinite(information_scale) or information_scale <= 0:
+        raise ValueError("sparse factor information scale must be positive")
     rotation_sigma = math.radians(rotation_sigma_deg)
-    information = torch.diag(torch.tensor(
+    information = information_scale * torch.diag(torch.tensor(
         [1 / translation_sigma_m**2] * 3 + [1 / rotation_sigma**2] * 3,
         dtype=torch.float64,
     ))

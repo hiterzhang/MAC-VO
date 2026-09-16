@@ -1,3 +1,4 @@
+import math
 import unittest
 
 import pypose as pp
@@ -241,6 +242,24 @@ class SparseLoopValidationTests(unittest.TestCase):
         self.assertAlmostEqual(float(factor.information[0, 0]), 16.0)
         expected_rotation = 1 / float(torch.deg2rad(torch.tensor(10.0))) ** 2
         self.assertAlmostEqual(float(factor.information[3, 3]), expected_rotation, places=4)
+
+    def test_scales_conservative_sparse_factor_information(self):
+        factor = conservative_sparse_factor(
+            source=10,
+            target=100,
+            measurement=pp.identity_SE3(dtype=torch.float64).tensor(),
+            inliers=60,
+            inlier_ratio=0.6,
+            translation_sigma_m=0.25,
+            rotation_sigma_deg=10.0,
+            information_scale=10000.0,
+        )
+
+        self.assertAlmostEqual(float(factor.information[0, 0]), 160000.0)
+        expected_rotation = 10000.0 / math.radians(10.0) ** 2
+        self.assertAlmostEqual(
+            float(factor.information[3, 3]), expected_rotation, places=3
+        )
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
     def test_cuda_depth_maps_accept_cpu_orb_matches(self):
