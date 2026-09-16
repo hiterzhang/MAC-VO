@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -58,6 +59,60 @@ struct Candidate {
     double score;
 };
 
+struct StoredORBFrame {
+    DBoW2::BowVector bow;
+    std::vector<cv::KeyPoint> keypoints;
+    cv::Mat descriptors;
+};
+
+struct SparseMatchResult {
+    int raw_knn_count = 0;
+    int ratio_count = 0;
+    std::vector<cv::DMatch> matches;
+};
+
+SparseMatchResult match_features(
+    const StoredORBFrame& source,
+    const cv::Mat& target_descriptors,
+    double ratio,
+    int max_matches
+) {
+    SparseMatchResult result;
+    if (source.descriptors.empty() || target_descriptors.empty()) return result;
+
+    cv::BFMatcher matcher(cv::NORM_HAMMING, false);
+    std::vector<std::vector<cv::DMatch>> forward_knn;
+    matcher.knnMatch(source.descriptors, target_descriptors, forward_knn, 2);
+    result.raw_knn_count = static_cast<int>(forward_knn.size());
+
+    std::vector<cv::DMatch> ratio_matches;
+    ratio_matches.reserve(forward_knn.size());
+    for (const auto& pair : forward_knn) {
+        if (pair.size() < 2) continue;
+        if (pair[0].distance < ratio * pair[1].distance) {
+            ratio_matches.push_back(pair[0]);
+        }
+    }
+    result.ratio_count = static_cast<int>(ratio_matches.size());
+
+    std::vector<cv::DMatch> reverse;
+    matcher.match(target_descriptors, source.descriptors, reverse);
+    for (const auto& match : ratio_matches) {
+        if (match.trainIdx < 0 || match.trainIdx >= static_cast<int>(reverse.size())) continue;
+        const auto& backward = reverse[match.trainIdx];
+        if (backward.trainIdx == match.queryIdx) result.matches.push_back(match);
+    }
+    std::sort(result.matches.begin(), result.matches.end(), [](const cv::DMatch& left, const cv::DMatch& right) {
+        if (left.distance != right.distance) return left.distance < right.distance;
+        if (left.queryIdx != right.queryIdx) return left.queryIdx < right.queryIdx;
+        return left.trainIdx < right.trainIdx;
+    });
+    if (static_cast<int>(result.matches.size()) > max_matches) {
+        result.matches.resize(max_matches);
+    }
+    return result;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -79,8 +134,8 @@ int main(int argc, char** argv) {
         return 3;
     }
     auto orb = cv::ORB::create(1200);
-    std::unordered_map<long, DBoW2::BowVector> database;
-    std::cout << "READY\t1\t" << sha256_file(vocabulary_path)
+    std::unordered_map<long, StoredORBFrame> database;
+    std::cout << "READY\t2\t" << sha256_file(vocabulary_path)
               << "\t" << CV_VERSION << std::endl;
 
     std::string line;
@@ -95,15 +150,18 @@ int main(int argc, char** argv) {
         }
         try {
             const auto fields = split_tabs(line);
-            if (fields.size() != 6 || fields[0] != "QUERY") {
-                throw std::runtime_error("expected QUERY with five arguments");
+            if (fields.size() != 8 || fields[0] != "QUERY") {
+                throw std::runtime_error("expected QUERY with seven arguments");
             }
             const long request_id = std::stol(fields[1]);
             const long target_id = std::stol(fields[2]);
             const std::string image_path = fields[3];
             const long min_gap = std::stol(fields[4]);
             const int top_k = std::stoi(fields[5]);
-            if (request_id < 0 || target_id < 0 || min_gap < 0 || top_k < 1) {
+            const double ratio = std::stod(fields[6]);
+            const int max_matches = std::stoi(fields[7]);
+            if (request_id < 0 || target_id < 0 || min_gap < 0 || top_k < 1 ||
+                !std::isfinite(ratio) || ratio <= 0.0 || ratio >= 1.0 || max_matches < 1) {
                 throw std::runtime_error("numeric arguments are invalid");
             }
             cv::Mat image = cv::imread(image_path, cv::IMREAD_GRAYSCALE);
@@ -117,22 +175,39 @@ int main(int argc, char** argv) {
             std::vector<Candidate> candidates;
             for (const auto& item : database) {
                 if (target_id - item.first < min_gap) continue;
-                candidates.push_back({item.first, vocabulary.score(current, item.second)});
+                candidates.push_back({item.first, vocabulary.score(current, item.second.bow)});
             }
             std::sort(candidates.begin(), candidates.end(), [](const Candidate& left, const Candidate& right) {
                 if (left.score != right.score) return left.score > right.score;
                 return left.frame_id < right.frame_id;
             });
             if (static_cast<int>(candidates.size()) > top_k) candidates.resize(top_k);
-            database[target_id] = current;
-
             std::cout << "RESULT\t" << request_id << "\t" << target_id
                       << "\t" << candidates.size();
             std::cout << std::setprecision(17);
             for (const auto& candidate : candidates) {
-                std::cout << "\t" << candidate.frame_id << ":" << candidate.score;
+                const auto& source = database.at(candidate.frame_id);
+                const auto matched = match_features(
+                    source, descriptors, ratio, max_matches
+                );
+                std::cout << "\t" << candidate.frame_id << ":" << candidate.score
+                          << ":" << matched.raw_knn_count
+                          << ":" << matched.ratio_count
+                          << ":" << matched.matches.size() << ":";
+                for (std::size_t match_index = 0; match_index < matched.matches.size(); ++match_index) {
+                    if (match_index) std::cout << ";";
+                    const auto& match = matched.matches[match_index];
+                    const auto& source_keypoint = source.keypoints.at(match.queryIdx);
+                    const auto& target_keypoint = keypoints.at(match.trainIdx);
+                    std::cout << source_keypoint.pt.x << "," << source_keypoint.pt.y
+                              << "," << target_keypoint.pt.x << "," << target_keypoint.pt.y
+                              << "," << match.distance;
+                }
             }
             std::cout << std::endl;
+            database[target_id] = StoredORBFrame{
+                current, keypoints, descriptors.clone()
+            };
         } catch (const std::exception& error) {
             std::cout << "ERROR\t" << error.what() << std::endl;
         }
