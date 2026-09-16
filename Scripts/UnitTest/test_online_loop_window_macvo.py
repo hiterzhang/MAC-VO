@@ -221,6 +221,36 @@ class OnlineLoopWindowMACVOTests(unittest.TestCase):
         system.compress_edge.assert_not_called()
         system.pose_backend.submit.assert_called_once_with("snapshot")
 
+    def test_sparse_diagnostic_payload_contains_thresholds_and_hypotheses(self):
+        system = OnlineLoopWindowMACVO.__new__(OnlineLoopWindowMACVO)
+        system.loop_enabled = True
+        system.validation_mode = "sparse_se3"
+        system.loop_provider = SimpleNamespace(
+            status={"status": "ready"}, handshake={"protocol_version": 2}
+        )
+        system.Frontend = SimpleNamespace(diagnostics={"loop_calls": 2})
+        system.pose_graph_version = 1
+        system.loop_records = [{"status": "accepted_sparse"}]
+        system.hypothesis_records = [{"state": "confirmed"}]
+        system.compression_records = []
+        system.candidate_filter_counts = __import__("collections").Counter()
+        system.expired_targets = 0
+        system.pose_backend = SimpleNamespace(diagnostics={"submitted": 1})
+        system.pose_graph_writebacks = 0
+        system.pose_graph_results = []
+        system.sparse_geometry_config = SparseGeometryConfig(
+            min_ransac_inliers=25
+        )
+        system.sparse_translation_sigma = 0.25
+        system.sparse_rotation_sigma_deg = 10.0
+
+        payload = system._online_loop_diagnostics((factor(0, 1, "loop"),))
+
+        self.assertEqual(payload["validation_mode"], "sparse_se3")
+        self.assertEqual(payload["protocol_version"], 2)
+        self.assertEqual(payload["sparse_geometry"]["min_ransac_inliers"], 25)
+        self.assertEqual(payload["hypothesis_records"], [{"state": "confirmed"}])
+
 
 if __name__ == "__main__":
     unittest.main()

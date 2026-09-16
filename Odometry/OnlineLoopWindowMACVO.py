@@ -1,7 +1,7 @@
 """WindowICP with asynchronous ORB retrieval and serialized online loop closure."""
 
 from collections import Counter, deque
-from dataclasses import replace
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -619,14 +619,42 @@ class OnlineLoopWindowMACVO(WindowMACVO):
                     {"graph_version": self.pose_graph_version},
                 ),
             )
-        payload = {
+        payload = self._online_loop_diagnostics(factors)
+        (folder / "online_loop_diagnostics.json").write_text(
+            json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8"
+        )
+
+    def _online_loop_diagnostics(self, factors):
+        rejection_counts = Counter(
+            item.get("reason") for item in self.loop_records
+            if item.get("reason") is not None
+        )
+        return {
             "loop_enabled": self.loop_enabled,
+            "validation_mode": getattr(self, "validation_mode", "legacy_dense"),
             "provider": None if self.loop_provider is None else self.loop_provider.status,
+            "protocol_version": (
+                None if self.loop_provider is None
+                else self.loop_provider.handshake.get("protocol_version")
+            ),
             "frontend": self.Frontend.diagnostics,
             "pose_graph_version": self.pose_graph_version,
             "pose_factors": len(factors),
             "factor_kinds": dict(Counter(factor.kind for factor in factors)),
             "loop_records": self.loop_records,
+            "hypothesis_records": getattr(self, "hypothesis_records", []),
+            "sparse_geometry": asdict(getattr(
+                self, "sparse_geometry_config", SparseGeometryConfig()
+            )),
+            "sparse_factor": {
+                "translation_sigma_m": getattr(
+                    self, "sparse_translation_sigma", 0.25
+                ),
+                "rotation_sigma_deg": getattr(
+                    self, "sparse_rotation_sigma_deg", 10.0
+                ),
+            },
+            "sparse_rejection_counts": dict(rejection_counts),
             "compression_records": self.compression_records,
             "candidate_filter_counts": dict(self.candidate_filter_counts),
             "expired_targets": self.expired_targets,
@@ -638,6 +666,3 @@ class OnlineLoopWindowMACVO(WindowMACVO):
                 if torch.cuda.is_available() else 0
             ),
         }
-        (folder / "online_loop_diagnostics.json").write_text(
-            json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8"
-        )

@@ -8,6 +8,7 @@ from Scripts.Experiment.CompareOnlineORBLoop import (
     build_parser,
     loop_switch_summary,
     online_invariants,
+    sparse_loop_summary,
     uses_online_diagnostics,
     write_rows,
 )
@@ -83,6 +84,47 @@ class CompareOnlineORBLoopTests(unittest.TestCase):
             config["Odometry"]["args"]["online_loop"]["enabled"]
         )
         self.assertTrue(uses_online_diagnostics("window_orb_loop_no_skip"))
+
+    def test_sparse_mode_uses_sparse_configuration_and_diagnostics(self):
+        _, config = load_config(MODE_CONFIGS["window_orb_loop_sparse"])
+
+        self.assertEqual(
+            config["Odometry"]["args"]["online_loop"]["validation_mode"],
+            "sparse_se3",
+        )
+        self.assertTrue(uses_online_diagnostics("window_orb_loop_sparse"))
+
+    def test_sparse_loop_summary_reports_states_and_quality(self):
+        diagnostics = {
+            "hypothesis_records": [
+                {"state": "tentative"},
+                {"state": "confirmed"},
+                {"state": "strong"},
+            ],
+            "loop_records": [
+                {
+                    "status": "tentative",
+                    "metrics": {
+                        "ransac_ratio": 0.5,
+                        "reprojection_forward_median_px": 2.0,
+                    },
+                },
+                {
+                    "status": "accepted_sparse",
+                    "information_eigenvalues": [16.0, 32.8],
+                },
+            ],
+        }
+
+        self.assertEqual(sparse_loop_summary(diagnostics), {
+            "tentative_hypotheses": 1,
+            "confirmed_hypotheses": 1,
+            "strong_hypotheses": 1,
+            "emitted_sparse_factors": 1,
+            "median_sparse_ransac_ratio": 0.5,
+            "median_sparse_reprojection_px": 2.0,
+            "max_sparse_information_eigenvalue": 32.8,
+        })
 
 
 if __name__ == "__main__":

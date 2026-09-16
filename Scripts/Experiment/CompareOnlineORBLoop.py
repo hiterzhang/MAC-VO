@@ -25,6 +25,10 @@ MODE_CONFIGS = {
     "window_skip": ROOT / "Config/Experiment/MACVO/MACVO_Fast_WindowICP.yaml",
     "window_pose_graph": ROOT / "Config/Experiment/MACVO/MACVO_Fast_WindowICP_ORBLoop.yaml",
     "window_orb_loop": ROOT / "Config/Experiment/MACVO/MACVO_Fast_WindowICP_ORBLoop.yaml",
+    "window_orb_loop_sparse": (
+        ROOT / "Config/Experiment/MACVO/"
+        "MACVO_Fast_WindowICP_ORBLoop_Sparse.yaml"
+    ),
     "window_orb_loop_no_skip": (
         ROOT / "Config/Experiment/MACVO/"
         "MACVO_Fast_WindowICP_ORBLoop_NoSkip.yaml"
@@ -33,6 +37,7 @@ MODE_CONFIGS = {
 ONLINE_DIAGNOSTIC_MODES = frozenset({
     "window_pose_graph",
     "window_orb_loop",
+    "window_orb_loop_sparse",
     "window_orb_loop_no_skip",
 })
 
@@ -91,6 +96,47 @@ def loop_switch_summary(diagnostics, threshold=0.01, long_gap=100):
             and int(record["b"]) - int(record["a"]) > long_gap
             for record in records
         ),
+    }
+
+
+def sparse_loop_summary(diagnostics):
+    hypothesis = diagnostics.get("hypothesis_records", [])
+    loop_records = diagnostics.get("loop_records", [])
+    ratios = [
+        float(item["metrics"]["ransac_ratio"])
+        for item in loop_records
+        if item.get("metrics", {}).get("ransac_ratio") is not None
+    ]
+    reprojection = [
+        float(item["metrics"]["reprojection_forward_median_px"])
+        for item in loop_records
+        if item.get("metrics", {}).get("reprojection_forward_median_px") is not None
+    ]
+    information = [
+        float(value)
+        for item in loop_records
+        for value in item.get("information_eigenvalues", [])
+    ]
+    return {
+        "tentative_hypotheses": sum(
+            item.get("state") == "tentative" for item in hypothesis
+        ),
+        "confirmed_hypotheses": sum(
+            item.get("state") == "confirmed" for item in hypothesis
+        ),
+        "strong_hypotheses": sum(
+            item.get("state") == "strong" for item in hypothesis
+        ),
+        "emitted_sparse_factors": sum(
+            item.get("status") == "accepted_sparse" for item in loop_records
+        ),
+        "median_sparse_ransac_ratio": (
+            float(np.median(ratios)) if ratios else 0.0
+        ),
+        "median_sparse_reprojection_px": (
+            float(np.median(reprojection)) if reprojection else 0.0
+        ),
+        "max_sparse_information_eigenvalue": max(information, default=0.0),
     }
 
 
@@ -198,13 +244,14 @@ def main(argv=None):
                 "normal_frontend_calls": diagnostics["frontend"]["tracking_calls"],
                 "loop_frontend_calls": diagnostics["frontend"]["loop_calls"],
                 "accepted_loops": sum(
-                    item.get("status") == "accepted"
+                    item.get("status") in {"accepted", "accepted_sparse"}
                     for item in diagnostics["loop_records"]
                 ),
                 "pose_graph_writebacks": diagnostics["pose_graph_writebacks"],
                 "peak_vram_bytes": diagnostics["cuda_max_memory_reserved"],
                 "pose_factors": diagnostics["pose_factors"],
                 **loop_switch_summary(diagnostics),
+                **sparse_loop_summary(diagnostics),
             })
             (run_root / "online_invariants.json").write_text(
                 json.dumps(invariant, indent=2, allow_nan=False),
