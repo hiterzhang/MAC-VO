@@ -125,6 +125,22 @@ class SparseEuRoCBatchTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("MISSING", result.stdout)
 
+    def test_real_preflight_logs_missing_file_in_fresh_result_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worktree = Path(directory, "worktree")
+            result_root = Path(directory, "new-results")
+            make_fixture(worktree)
+            (worktree / "Model/MACVO_FrontendCov.pth").unlink()
+
+            result = run_script(
+                "MH01", worktree=worktree, result_root=result_root,
+            )
+
+            batch_log = result_root / "batch.log"
+            self.assertTrue(batch_log.exists())
+            self.assertIn("MISSING", batch_log.read_text(encoding="utf-8"))
+        self.assertEqual(result.returncode, 2, result.stdout)
+
     def test_marker_and_matching_metrics_skip_sequence(self):
         with tempfile.TemporaryDirectory() as directory:
             worktree = Path(directory, "worktree")

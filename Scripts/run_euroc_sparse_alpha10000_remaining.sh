@@ -43,6 +43,10 @@ emit() {
     fi
 }
 
+if [[ "$DRY_RUN" != "1" ]]; then
+    mkdir -p "$STATE_DIR" "$LOG_DIR"
+fi
+
 missing=0
 required=(
     "$PYTHON"
@@ -92,7 +96,6 @@ if (( missing )); then
 fi
 
 if [[ "$DRY_RUN" != "1" ]]; then
-    mkdir -p "$STATE_DIR" "$LOG_DIR"
     exec 9>"$RESULT_ROOT/.batch.lock"
     if ! flock -n 9; then
         echo -e "LOCKED\t$RESULT_ROOT"
