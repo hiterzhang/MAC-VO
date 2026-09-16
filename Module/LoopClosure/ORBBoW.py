@@ -1,10 +1,13 @@
 """Asynchronous adapter for the persistent ORB-BoW candidate sidecar."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import math
 from pathlib import Path
 import queue
 import subprocess
 import threading
+
+import numpy as np
 
 
 @dataclass(frozen=True)
@@ -12,6 +15,15 @@ class ORBLoopCandidate:
     source: int
     score: float
     rank: int
+    raw_knn_matches: int = 0
+    ratio_matches: int = 0
+    matches: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 5), dtype=np.float64)
+    )
+
+    @property
+    def mutual_matches(self):
+        return len(self.matches)
 
 
 @dataclass(frozen=True)
@@ -19,6 +31,44 @@ class ORBLoopCandidateBatch:
     request_id: int
     target: int
     candidates: tuple[ORBLoopCandidate, ...]
+
+
+def parse_candidate_field(value, *, rank):
+    fields = value.split(":", 5)
+    if len(fields) != 6:
+        raise ValueError("malformed ORB candidate field")
+    source = int(fields[0])
+    score = float(fields[1])
+    raw_knn_matches = int(fields[2])
+    ratio_matches = int(fields[3])
+    mutual_matches = int(fields[4])
+    if source < 0 or not math.isfinite(score):
+        raise ValueError("ORB candidate metadata must be finite and nonnegative")
+    if min(raw_knn_matches, ratio_matches, mutual_matches) < 0:
+        raise ValueError("ORB match counts must be nonnegative")
+    matches = []
+    if fields[5]:
+        for encoded in fields[5].split(";"):
+            match = [float(component) for component in encoded.split(",")]
+            if len(match) != 5:
+                raise ValueError("malformed ORB match")
+            if not all(math.isfinite(component) for component in match):
+                raise ValueError("ORB match values must be finite")
+            if match[4] < 0:
+                raise ValueError("ORB descriptor distance must be nonnegative")
+            matches.append(match)
+    if len(matches) != mutual_matches:
+        raise ValueError("ORB match count does not match payload")
+    array = np.asarray(matches, dtype=np.float64).reshape(-1, 5)
+    array.setflags(write=False)
+    return ORBLoopCandidate(
+        source=source,
+        score=score,
+        rank=rank,
+        raw_knn_matches=raw_knn_matches,
+        ratio_matches=ratio_matches,
+        matches=array,
+    )
 
 
 def filter_loop_candidates(
@@ -34,7 +84,11 @@ def filter_loop_candidates(
     selected = []
     reasons = {"existing": 0, "pending": 0, "nms": 0}
     for rank, item in enumerate(candidates):
-        source, score = item
+        candidate = (
+            item if isinstance(item, ORBLoopCandidate)
+            else ORBLoopCandidate(item[0], float(item[1]), rank)
+        )
+        source, score = candidate.source, candidate.score
         pair = (source, target)
         if pair in existing_pairs:
             reasons["existing"] += 1
@@ -49,7 +103,7 @@ def filter_loop_candidates(
         ):
             reasons["nms"] += 1
             continue
-        selected.append(ORBLoopCandidate(source, float(score), rank))
+        selected.append(candidate)
         if len(selected) >= maximum:
             break
     return selected, reasons
@@ -63,12 +117,20 @@ class ORBLoopCandidateProvider:
         vocabulary,
         min_temporal_gap,
         top_k,
+        ratio_test=0.80,
+        max_matches=300,
         queue_size=8,
     ):
         self.executable = Path(executable)
         self.vocabulary = Path(vocabulary)
         self.min_temporal_gap = min_temporal_gap
         self.top_k = top_k
+        self.ratio_test = float(ratio_test)
+        self.max_matches = int(max_matches)
+        if not 0 < self.ratio_test < 1:
+            raise ValueError("ORB ratio test must be within (0, 1)")
+        if self.max_matches < 1:
+            raise ValueError("ORB maximum matches must be positive")
         self._responses = queue.Queue(maxsize=queue_size)
         self._write_lock = threading.Lock()
         self._next_request = 0
@@ -99,7 +161,7 @@ class ORBLoopCandidateProvider:
             )
             assert self.process.stdout is not None
             fields = self.process.stdout.readline().strip().split("\t")
-            if len(fields) != 4 or fields[0] != "READY" or fields[1] != "1":
+            if len(fields) != 4 or fields[0] != "READY" or fields[1] != "2":
                 raise RuntimeError("invalid ORB sidecar handshake")
             self.handshake = {
                 "protocol_version": int(fields[1]),
@@ -117,7 +179,18 @@ class ORBLoopCandidateProvider:
             self.status = {"status": "disabled", "reason": str(error)}
             if self.process is not None:
                 self.process.terminate()
+                self.process.wait(timeout=5)
+                self._close_process_streams()
             self.process = None
+
+    def _close_process_streams(self):
+        if self.process is None:
+            return
+        for stream in (
+            self.process.stdin, self.process.stdout, self.process.stderr
+        ):
+            if stream is not None and not stream.closed:
+                stream.close()
 
     @property
     def enabled(self):
@@ -148,10 +221,7 @@ class ORBLoopCandidateProvider:
                     raise ValueError("sidecar result metadata mismatch")
                 candidates = []
                 for rank, field in enumerate(fields[4:]):
-                    source, score = field.split(":", 1)
-                    candidates.append(
-                        ORBLoopCandidate(int(source), float(score), rank)
-                    )
+                    candidates.append(parse_candidate_field(field, rank=rank))
                 response = ORBLoopCandidateBatch(
                     request_id, target, tuple(candidates)
                 )
@@ -179,7 +249,8 @@ class ORBLoopCandidateProvider:
         assert self.process is not None and self.process.stdin is not None
         command = (
             f"QUERY\t{request_id}\t{frame_id}\t{Path(left_image_path)}\t"
-            f"{self.min_temporal_gap}\t{self.top_k}\n"
+            f"{self.min_temporal_gap}\t{self.top_k}\t{self.ratio_test}\t"
+            f"{self.max_matches}\n"
         )
         with self._write_lock:
             self.process.stdin.write(command)
@@ -208,3 +279,4 @@ class ORBLoopCandidateProvider:
             self.process.terminate()
         if self.reader is not None:
             self.reader.join(timeout=5)
+        self._close_process_streams()
