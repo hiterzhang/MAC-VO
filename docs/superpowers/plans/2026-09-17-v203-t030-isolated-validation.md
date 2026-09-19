@@ -322,14 +322,14 @@ Run:
 ```bash
 /home/zzh/MACVO/.venv/bin/python - <<'PY'
 from pathlib import Path
-import yaml
+from Utility.Config import load_config
 
 root = Path("Config/Experiment/MACVO")
 for name in (
     "MACVO_Fast_WindowICP_ORBLoop_Sparse.yaml",
     "MACVO_Fast_WindowICP_ORBLoop_Sparse_t030.yaml",
 ):
-    data = yaml.safe_load((root / name).read_text(encoding="utf-8"))
+    _, data = load_config(root / name)
     hypothesis = data["Odometry"]["args"]["online_loop"]["hypothesis"]
     pose_graph = data["Odometry"]["args"]["pose_graph"]
     print(
