@@ -22,8 +22,8 @@ online `alpha=10000` run and reduces ATE toward the fixed-graph offline result.
 
 The runner executes the full V203 sequence from frame zero with seed zero and
 the t030 mode only. Existing model, ORB vocabulary, sidecar, sequence data, loop
-weight (`10000`), switch prior (`10000`), and all sparse-geometry thresholds
-remain unchanged.
+weight (`10000`), base switch prior (`1.0`, effective value `10000` after loop
+scaling), and all sparse-geometry thresholds remain unchanged.
 
 ## Validation
 

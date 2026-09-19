@@ -29,6 +29,10 @@ MODE_CONFIGS = {
         ROOT / "Config/Experiment/MACVO/"
         "MACVO_Fast_WindowICP_ORBLoop_Sparse.yaml"
     ),
+    "window_orb_loop_sparse_t030": (
+        ROOT / "Config/Experiment/MACVO/"
+        "MACVO_Fast_WindowICP_ORBLoop_Sparse_t030.yaml"
+    ),
     "window_orb_loop_no_skip": (
         ROOT / "Config/Experiment/MACVO/"
         "MACVO_Fast_WindowICP_ORBLoop_NoSkip.yaml"
@@ -38,6 +42,7 @@ ONLINE_DIAGNOSTIC_MODES = frozenset({
     "window_pose_graph",
     "window_orb_loop",
     "window_orb_loop_sparse",
+    "window_orb_loop_sparse_t030",
     "window_orb_loop_no_skip",
 })
 

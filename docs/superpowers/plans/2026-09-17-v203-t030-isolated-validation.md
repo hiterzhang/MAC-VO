@@ -345,8 +345,8 @@ PY
 Expected:
 
 ```text
-MACVO_Fast_WindowICP_ORBLoop_Sparse.yaml MACVO-Fast-WindowICP5-ORBLoop-Sparse 0.25 10000.0 10000.0
-MACVO_Fast_WindowICP_ORBLoop_Sparse_t030.yaml MACVO-Fast-WindowICP5-ORBLoop-Sparse-t030 0.3 10000.0 10000.0
+MACVO_Fast_WindowICP_ORBLoop_Sparse.yaml MACVO-Fast-WindowICP5-ORBLoop-Sparse 0.25 10000.0 1.0
+MACVO_Fast_WindowICP_ORBLoop_Sparse_t030.yaml MACVO-Fast-WindowICP5-ORBLoop-Sparse-t030 0.3 10000.0 1.0
 ```
 
 - [ ] **Step 3: Verify the exact full-run command without starting the 30-minute run**

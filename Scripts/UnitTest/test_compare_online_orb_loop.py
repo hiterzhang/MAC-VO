@@ -1,3 +1,4 @@
+import copy
 import json
 from pathlib import Path
 import tempfile
@@ -98,6 +99,26 @@ class CompareOnlineORBLoopTests(unittest.TestCase):
             10000.0,
         )
         self.assertTrue(uses_online_diagnostics("window_orb_loop_sparse"))
+
+    def test_t030_sparse_mode_changes_only_name_and_translation_threshold(self):
+        _, baseline = load_config(MODE_CONFIGS["window_orb_loop_sparse"])
+        _, t030 = load_config(MODE_CONFIGS["window_orb_loop_sparse_t030"])
+
+        self.assertEqual(
+            t030["Odometry"]["args"]["online_loop"]["hypothesis"]
+            ["max_correction_translation_m"],
+            0.30,
+        )
+        self.assertTrue(
+            uses_online_diagnostics("window_orb_loop_sparse_t030")
+        )
+
+        normalized = copy.deepcopy(t030)
+        normalized["Odometry"]["name"] = baseline["Odometry"]["name"]
+        normalized["Odometry"]["args"]["online_loop"]["hypothesis"][
+            "max_correction_translation_m"
+        ] = 0.25
+        self.assertEqual(normalized, baseline)
 
     def test_legacy_mode_defaults_to_unit_loop_scale(self):
         cfg, _ = load_config(MODE_CONFIGS["window_orb_loop"])
