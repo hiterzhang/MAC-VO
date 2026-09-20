@@ -5,6 +5,8 @@ SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKTREE="${WORKTREE:-$SCRIPT_ROOT}"
 PYTHON="${PYTHON:-/home/zzh/MACVO/.venv/bin/python}"
 RESULT_ROOT="${RESULT_ROOT:-/home/zzh/MACVO/Results/SparseORBLoop_EuRoC_alpha10000}"
+MODE="${MODE:-window_orb_loop_sparse}"
+ODOM_CONFIG="${ODOM_CONFIG:-$WORKTREE/Config/Experiment/MACVO/MACVO_Fast_WindowICP_ORBLoop_Sparse.yaml}"
 DEFAULT_SEQUENCES=(MH01 MH02 MH03 MH05 V101 V102 V103 V201 V202)
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -51,7 +53,7 @@ missing=0
 required=(
     "$PYTHON"
     "$WORKTREE/Scripts/Experiment/CompareOnlineORBLoop.py"
-    "$WORKTREE/Config/Experiment/MACVO/MACVO_Fast_WindowICP_ORBLoop_Sparse.yaml"
+    "$ODOM_CONFIG"
     "$WORKTREE/build/orb_bow/macvo_orb_bow"
     "$WORKTREE/cache/ORBvoc.txt"
     "$WORKTREE/Model/MACVO_FrontendCov.pth"
@@ -104,10 +106,10 @@ if [[ "$DRY_RUN" != "1" ]]; then
 fi
 
 completed_result() {
-    "$PYTHON" - "$RESULT_ROOT" "$1" <<'PY'
+    "$PYTHON" - "$RESULT_ROOT" "$1" "$MODE" <<'PY'
 from pathlib import Path
 import json, sys
-root, sequence = Path(sys.argv[1]), sys.argv[2]
+root, sequence, mode = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 matches = []
 for path in root.rglob("metrics.json") if root.exists() else ():
     try:
@@ -119,7 +121,7 @@ for path in root.rglob("metrics.json") if root.exists() else ():
     if any(
         isinstance(row, dict)
         and row.get("sequence") == sequence
-        and row.get("mode") == "window_orb_loop_sparse"
+        and row.get("mode") == mode
         for row in rows
     ):
         matches.append(path)
@@ -130,10 +132,10 @@ PY
 }
 
 summary_row() {
-    "$PYTHON" - "$1" "$2" <<'PY'
+    "$PYTHON" - "$1" "$2" "$MODE" <<'PY'
 from pathlib import Path
 import json, sys
-folder, sequence = Path(sys.argv[1]), sys.argv[2]
+folder, sequence, mode = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 rows = json.loads((folder / "metrics.json").read_text(encoding="utf-8"))
 if not isinstance(rows, list):
     raise ValueError("metrics payload must be a list")
@@ -141,7 +143,7 @@ row = next(
     item for item in rows
     if isinstance(item, dict)
     and item.get("sequence") == sequence
-    and item.get("mode") == "window_orb_loop_sparse"
+    and item.get("mode") == mode
 )
 values = [
     row.get("RMSE_ATE", ""), row.get("RMSE_RTE", ""),
@@ -184,7 +186,7 @@ for sequence in "${SEQUENCES[@]}"; do
     emit "RUN\t$sequence"
     log_file="$LOG_DIR/${sequence}.log"
     if [[ "$DRY_RUN" == "1" ]]; then
-        echo "$PYTHON Scripts/Experiment/CompareOnlineORBLoop.py --sequence $sequence --seq-from 0 --seed 0 --modes window_orb_loop_sparse --result-root $RESULT_ROOT"
+        echo "$PYTHON Scripts/Experiment/CompareOnlineORBLoop.py --sequence $sequence --seq-from 0 --seed 0 --modes $MODE --result-root $RESULT_ROOT"
         if [[ "${DRY_RUN_FAIL_SEQUENCE:-}" == "$sequence" ]]; then
             emit "FAIL\t$sequence\tdry-run"
             failed+=("$sequence")
@@ -197,7 +199,7 @@ for sequence in "${SEQUENCES[@]}"; do
     rm -f "$complete_marker" "$failed_marker"
     if "$PYTHON" Scripts/Experiment/CompareOnlineORBLoop.py \
         --sequence "$sequence" --seq-from 0 --seed 0 \
-        --modes window_orb_loop_sparse --result-root "$RESULT_ROOT" \
+        --modes "$MODE" --result-root "$RESULT_ROOT" \
         2>&1 | tee -a "$log_file" "$BATCH_LOG"; then
         result="$(completed_result "$sequence")"
         if [[ -z "$result" ]]; then
