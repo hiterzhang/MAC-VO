@@ -73,6 +73,11 @@ The exact multiplication order must be verified with synthetic transforms and
 the project's NED/EDN conversion. No coordinate conversion is accepted based
 only on visual inspection of trajectories.
 
+The existing PyPose factor tangent order is translation followed by rotation,
+while GTSAM Pose3 noise uses rotation followed by translation. Every 6x6
+information or covariance matrix crossing the bridge must be permuted with an
+explicit tested permutation; directly passing the matrix is invalid.
+
 ## Local State
 
 For every camera frame `i` in the local window, create:
@@ -137,8 +142,9 @@ Initialization must not use `gt_attitude` or other ground-truth fields.
 The first implementation uses:
 
 1. First body pose from the visual estimator.
-2. Gravity direction from the mean accelerometer measurement over a configurable
-   initial interval, subject to a stationarity check.
+2. Gravity vector in the existing visual world frame from the mean
+   accelerometer measurement, the initial visual body orientation, and a
+   configurable initial interval, subject to a stationarity check.
 3. Gyroscope bias from the initial mean angular velocity when stationary.
 4. Accelerometer bias initialized to zero after gravity alignment.
 5. Initial velocity from finite differences over the first valid visual body
@@ -146,7 +152,9 @@ The first implementation uses:
 6. Explicit priors on pose, velocity, accelerometer bias, and gyroscope bias.
 
 If the stationarity test fails, the system falls back to configurable zero
-bias and world gravity priors and records the fallback in diagnostics.
+bias and the project's NED gravity vector `[0, 0, +g]` and records the
+fallback in diagnostics. GTSAM preintegration receives this explicit gravity
+vector; it must not silently assume its default Z-up convention.
 
 ## Optimization and Writeback
 
@@ -209,6 +217,7 @@ local_vio:
   enabled: true
   window_size: 5
   optimizer_iterations: 10
+  visual_huber_delta: 3.0
   gravity_mps2: 9.81007
   initialization_seconds: 0.5
   stationary_gyro_threshold: 0.05
